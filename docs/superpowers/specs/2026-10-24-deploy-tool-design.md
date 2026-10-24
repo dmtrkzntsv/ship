@@ -15,16 +15,18 @@ The goal is to deploy every service-based project — econumo, billing,
 twillingate (+ twillingate-sql), winterflow (standalone and distributed) — the
 same way, with:
 
-- one **GitHub Action** in this repo that every project uses to publish its
-  built artifacts to the right R2 folder;
-- one **installed CLI tool**, `deploy`, written in Go, with its own config and
-  state and shell completion, that installs and operates those artifacts on a
-  host.
+- one **CLI tool**, `deploy`, written in Go, with its own config and state
+  and shell completion. On a laptop or in CI it publishes a project's built
+  files to the right R2 folder (`deploy publish`, called from each project's
+  Makefile); on a host it installs and operates them;
+- a **setup Action** in this repo that installs `deploy` in a workflow, and a
+  **Homebrew formula** in `dmtrkzntsv/homebrew-tap`.
 
 ## Goals
 
-- Any project publishes with one `uses: dmtrkzntsv/deploy@v1` step after its
-  own build.
+- Any project publishes with one `deploy publish` call — from its Makefile,
+  locally or in CI — after its own build. In CI, `uses: dmtrkzntsv/deploy@v1`
+  only puts `deploy` on the PATH.
 - Any host installs, updates, rolls back, operates and removes any project with
   the same commands.
 - Each project repo owns how it runs: its systemd unit ships with its release.
@@ -39,13 +41,13 @@ same way, with:
 
 - Building projects. Builds differ too much (cgo/DuckDB on native runners, SPA
   embedding, four winterflow binaries); each project keeps its build and only
-  hands the Action a folder of finished files.
+  hands `deploy publish` a folder of finished files.
 - Docker images, static sites, one-off jobs.
 - Managing dependencies a service needs (Postgres, Redis, Docker, Litestream,
   reverse proxy). Units may reference them; the tool does not install them.
 - Orchestrating several hosts at once. `deploy` acts on the host it runs on.
 - Changing the project repos. Moving econumo, billing, twillingate,
-  twillingate-sql and winterflow onto the Action and templated units is
+  twillingate-sql and winterflow onto `deploy publish` and templated units is
   follow-up work in each repo (listed at the end).
 
 ## Anti-goals (would be a failure even if it works)
@@ -53,7 +55,7 @@ same way, with:
 - A failed update that leaves a service down or on a half-swapped
   binary/unit pair.
 - Secrets, hostnames, domains or zone ids in this repo — it is public.
-- An Action that silently overwrites a released version.
+- A publish that silently overwrites a released version.
 - The tool needing per-project knowledge in this repo to deploy a new project.
 - A default that moves a beta/test service onto `latest` by accident.
 
@@ -97,27 +99,29 @@ matches the names econumo, billing and winterflow already produce.
 `release.json` exists so that a host on a moving channel can report the real
 version it runs (`latest` → `v1.4.2`).
 
-## The GitHub Action
+## Publishing
 
-Composite action at the repo root (`action.yml`), used as
-`dmtrkzntsv/deploy@v1`. It builds the `deploy` binary from the action's own
-checkout (`${{ github.action_path }}`, with `actions/setup-go`) and runs
-`deploy publish`, so publishing and installing share one implementation of the
-layout and checksums, and the code that runs is exactly the pinned ref.
+### `deploy publish`
 
-Inputs:
+Every project publishes through the same command, called from its own
+Makefile so a local `make publish-dev` and CI do exactly the same thing:
 
-| input | required | meaning |
-|---|---|---|
-| `project` | yes | R2 project folder |
-| `path` | yes | local folder with the built files (binaries, `*.service`, optional `*.env.example`) |
-| `version` | yes | the release version, written to `release.json` and used as the immutable channel |
-| `channels` | no | extra moving channels to also update, e.g. `latest` or `latest,dev` |
-| `endpoint`, `access-key-id`, `secret-access-key` | yes | R2 credentials (from the calling repo's secrets) |
-| `bucket` | no | default `lab` |
-| `keep` | no | version channels to keep after publishing, default `10`; `0` disables pruning |
+```make
+cdn-upload:
+	deploy publish econumo --path release-out --version $(VERSION) --channels $(CHANNELS)
+```
 
-`deploy publish` behaviour:
+`deploy publish <project> --path DIR --version V [--channels latest,dev] [--keep N] [--bucket B]`
+
+- `--path` — folder with the built files (binaries, `*.service`, optional
+  `*.env.example`).
+- `--version` — the release version, written to `release.json` and used as
+  the immutable channel.
+- `--channels` — moving channels to also update (`latest`, `dev`).
+- `--keep` — version channels to keep after publishing, default `10`; `0`
+  disables pruning.
+
+Behaviour:
 
 - Validates the folder before uploading anything: file names match the
   layout; every asset has a binary for at least amd64 and arm64; units
@@ -135,9 +139,32 @@ Inputs:
   the installer always verifies against it, so a host racing an upload fails
   the checksum instead of installing a mixed set.
 - `version` must match `^[A-Za-z0-9._-]+$` and must not be `latest`/`dev`.
-- After a fully successful publish it runs `deploy prune <project> --keep
-  <keep> --yes` (owner's decision: automatic, 10 by default). A prune failure
-  fails the step but never undoes the publish.
+- After a fully successful publish it prunes the project to `--keep`
+  versions (owner's decision: automatic, 10 by default). A prune failure
+  exits non-zero but never undoes the publish.
+- Needs write credentials (see *Credentials*).
+
+### The setup Action
+
+Composite action at the repo root (`action.yml`), used as
+`uses: dmtrkzntsv/deploy@v1`. It only installs the released `deploy` binary
+matching the action's ref onto the PATH (download from the GitHub release,
+verify against its `SHA256SUMS`) — like `actions/setup-go`. Optional input
+`version` overrides which release is installed. It takes no credentials; the
+workflow passes `DEPLOY_R2_*` from secrets to the `make` step that calls
+`deploy publish`:
+
+```yaml
+- uses: dmtrkzntsv/deploy@v1
+- run: make cdn-upload VERSION=${{ needs.tag.outputs.version }} CHANNELS=latest
+  env:
+    DEPLOY_R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+    DEPLOY_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+    DEPLOY_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+```
+
+The repo's own release workflow tags `vX.Y.Z` and moves the major tag (`v1`)
+so `@v1` keeps working.
 
 ### Pruning old versions
 
@@ -165,8 +192,10 @@ so `@v1` keeps working.
 
 ## The CLI
 
-One static Go binary (`CGO_ENABLED=0`), linux amd64/arm64/arm, installed at
-`/usr/local/bin/deploy`. Talks to R2 (S3 API) and Cloudflare natively; no aws
+One static Go binary (`CGO_ENABLED=0`), built for linux amd64/arm64/arm and
+darwin amd64/arm64; on hosts installed at `/usr/local/bin/deploy`. On macOS
+only `publish`, `prune`, `versions` and `completion` work; host commands exit
+with "Linux only". Talks to R2 (S3 API) and Cloudflare natively; no aws
 CLI or curl. Shells out only to `systemctl`, `journalctl`, `systemd-run`,
 `systemd-analyze`, `useradd`, `userdel`. Uses cobra for commands, help and
 completion. Every command that changes the host requires root.
@@ -184,7 +213,7 @@ deploy logs      <ref> [--service S] [-n N] [--no-follow]
 deploy run       <ref> [--service S] -- <args...>
 deploy status    [--service S]
 deploy versions  <ref>                     # channels and versions in R2
-deploy publish   ...                       # used by the Action
+deploy publish   <project> --path DIR --version V [--channels C] [--keep N]
 deploy prune     <project> [--keep N] [--older-than D] [--yes]
 deploy self-update [--version V]
 deploy completion bash|zsh|fish
@@ -316,14 +345,20 @@ Runs are serialised with a lock on the state file.
 - **Credentials** (owner's decision):
   - Hosts: one R2 API token, *Object Read* on the bucket only, shared by all
     projects. `deploy` never writes to R2 from a host (`publish` runs in CI).
-  - CI: one separate R2 token, *Object Read & Write* on the bucket, stored as
+  - Publishing (CI or laptop): one separate R2 token, *Object Read & Write*
+    on the bucket. On a laptop it lives in `~/.config/deploy/config.toml`
+    (same format, mode 0600) or `DEPLOY_R2_*` variables — never in the host's
+    `/etc/deploy/config.toml`. In CI it is stored as
     org secrets in `econumo` / `winterflow-org` and as repo secrets in
     personal-account repos. R2 scopes tokens per bucket, not per prefix, so
     per-project keys would add no isolation.
   - Cloudflare: one token, *Zone → Cache Purge* only, for the deployed zones;
     the zone id is per service in state.
-  - `deploy` must work with a read-only key: no write, list-only-what-it-
-    needs (`ListObjectsV2` on the bucket for completion and `versions`).
+  - Host commands must work with a read-only key (`ListObjectsV2` and
+    `GetObject` only).
+  - Config lookup order: environment variables, then
+    `~/.config/deploy/config.toml` when not root, then
+    `/etc/deploy/config.toml`.
 
 - `/var/lib/deploy/state.json` — written only by the tool, mode 0644 (no
   secrets, so completion works without sudo). Per service: Cloudflare zone id;
@@ -346,9 +381,20 @@ already installed in the chosen service.
 - This repo is **public** (the owner flips visibility). A private repo under a
   personal account cannot provide an Action to repos in the `econumo` org.
 - Release workflow (manual dispatch): tags `vX.Y.Z`, moves `v1`, builds
-  linux amd64/arm64/arm, creates a GitHub release with the binaries,
-  `SHA256SUMS` and `install.sh`, and publishes `deploy` to
-  `s3://<bucket>/deploy/<version>/` + `latest` with its own Action.
+  linux amd64/arm64/arm and darwin amd64/arm64, creates a GitHub release with
+  the raw binaries (`deploy-<os>-<arch>`, for `install.sh`, the setup Action
+  and `self-update`), tarballs `deploy-<version>-<os>-<arch>.tar.gz` (for
+  Homebrew), `SHA256SUMS` and `install.sh`; publishes the linux binaries to
+  `s3://<bucket>/deploy/<version>/` + `latest` with `deploy publish`; then
+  updates the Homebrew formula.
+- **Homebrew**: `brew install dmtrkzntsv/tap/deploy`. The release workflow
+  writes `Formula/deploy.rb` in `dmtrkzntsv/homebrew-tap` and pushes it, the
+  same way gosaid's release does (`scripts/update-brew-formula.sh`, token in
+  a `TAP_GITHUB_TOKEN` secret). The formula points at the release tarballs
+  per OS/arch (`on_macos`/`on_linux`, `on_arm`/`on_intel`), installs the
+  binary, and installs completions with
+  `generate_completions_from_executable(bin/"deploy", "completion")`. It is
+  meant for laptops; servers use `install.sh` (`/usr/local/bin`, root).
 - First install on a fresh host, no credentials needed:
   `curl -fsSL https://github.com/dmtrkzntsv/deploy/releases/latest/download/install.sh | sudo sh`
   — downloads the binary for the arch from the GitHub release, verifies the
@@ -383,7 +429,8 @@ Services installed by `econumo-deploy.sh` (unit at
 
 ## Decided by the owner
 
-- Upload-only Action; builds stay in each project.
+- Builds stay in each project; each Makefile publishes with `deploy publish`; the Action only installs `deploy`.
+- `deploy` is published to the `dmtrkzntsv/homebrew-tap` tap.
 - Each project repo owns its systemd unit; the tool templates paths/users into
   it so several services of one project coexist.
 - Services can hold several projects sharing user, data and runtime dir
@@ -408,7 +455,9 @@ Services installed by `econumo-deploy.sh` (unit at
   hand-edited config is never rewritten.
 - Cloudflare zone stored per service; one API token in config.
 - No `aws` profile support; keys from config/env only.
-- The Action builds `deploy` from source and runs `deploy publish`.
+- The Action installs a released binary rather than building from source.
+- macOS builds; host commands are Linux-only.
+- Laptop write credentials in `~/.config/deploy/config.toml`.
 - `release.json` added to every published channel.
 - Only `latest` and `dev` are moving channels.
 - Health check stays "unit stays active for 10 s".
@@ -426,12 +475,15 @@ Services installed by `econumo-deploy.sh` (unit at
 
 ## Follow-up in other repos (not this work)
 
-- econumo, billing: drop `cdn-upload`/`SHA256SUMS` steps, call the Action;
+- econumo, billing: make `cdn-upload` call `deploy publish`, drop their
+  `SHA256SUMS` steps, add the setup Action to workflows;
   publish `deployment/systemd/<project>.service` as a template.
 - twillingate: add R2 publishing of plain binaries + template unit; keep the
   GitHub release tarballs.
 - twillingate-sql: release workflow + template unit using `{{RUN_DIR}}` for
   the socket and read-only `{{DATA_DIR}}`.
-- winterflow: template units for standalone, api, hub, agent; call the
-  Action; set R2 secrets for the new bucket.
+- winterflow: template units for standalone, api, hub, agent;
+  `cdn-upload` via `deploy publish`; set R2 secrets for the new bucket.
+- homebrew-tap: add a fine-grained token with write access to the tap as
+  `TAP_GITHUB_TOKEN` in this repo.
 - Move all secrets to the new `lab` bucket credentials.
