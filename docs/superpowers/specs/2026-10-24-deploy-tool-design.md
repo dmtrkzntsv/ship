@@ -115,6 +115,7 @@ Inputs:
 | `channels` | no | extra moving channels to also update, e.g. `latest` or `latest,dev` |
 | `endpoint`, `access-key-id`, `secret-access-key` | yes | R2 credentials (from the calling repo's secrets) |
 | `bucket` | no | default `lab` |
+| `keep` | no | version channels to keep after publishing, default `10`; `0` disables pruning |
 
 `deploy publish` behaviour:
 
@@ -134,6 +135,30 @@ Inputs:
   the installer always verifies against it, so a host racing an upload fails
   the checksum instead of installing a mixed set.
 - `version` must match `^[A-Za-z0-9._-]+$` and must not be `latest`/`dev`.
+- After a fully successful publish it runs `deploy prune <project> --keep
+  <keep> --yes` (owner's decision: automatic, 10 by default). A prune failure
+  fails the step but never undoes the publish.
+
+### Pruning old versions
+
+`deploy prune <project> [--keep N] [--older-than DURATION] [--yes]`
+
+- Version channels are ordered by `published_at` from their `release.json`
+  (a folder without one is ordered by its newest object's LastModified and
+  reported as such).
+- Keeps the newest `N` (default 10); with `--older-than` deletes only versions
+  that are also older than that.
+- Never deletes `latest`, `dev`, or any version a moving channel's
+  `release.json` currently points to (those do not count toward `N`).
+- Without `--yes` it only prints what it would delete and the bytes freed.
+- Needs write credentials, taken from `DEPLOY_R2_*` environment variables
+  (as in CI or on a workstation); a host's read-only key fails with a clear
+  message.
+- Cannot know what hosts run: a pruned version can no longer be selected with
+  `--version`. Running services and `rollback` (local `.prev`) are
+  unaffected.
+- Prunes the whole project, components included (they share a version
+  folder).
 
 The repo's own release workflow tags `vX.Y.Z` and moves the major tag (`v1`)
 so `@v1` keeps working.
@@ -160,6 +185,7 @@ deploy run       <ref> [--service S] -- <args...>
 deploy status    [--service S]
 deploy versions  <ref>                     # channels and versions in R2
 deploy publish   ...                       # used by the Action
+deploy prune     <project> [--keep N] [--older-than D] [--yes]
 deploy self-update [--version V]
 deploy completion bash|zsh|fish
 ```
@@ -370,6 +396,7 @@ Services installed by `econumo-deploy.sh` (unit at
 - Twillingate also publishes plain binaries to R2 (its public GitHub release
   with tarballs stays).
 - This repo goes public.
+- Old versions are pruned automatically after every publish, keeping 10.
 
 ## Calls made in this document (owner to check)
 
