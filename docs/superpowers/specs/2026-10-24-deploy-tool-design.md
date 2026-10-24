@@ -1,6 +1,6 @@
 # deploy — one tool to publish and run all lab services
 
-Status: approved design pending owner sign-off · 2026-10-24
+Status: draft, awaiting owner review · 2026-10-24
 
 ## Why
 
