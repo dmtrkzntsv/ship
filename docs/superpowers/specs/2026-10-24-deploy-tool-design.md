@@ -287,6 +287,18 @@ Runs are serialised with a lock on the state file.
   `DEPLOY_R2_BUCKET`, `DEPLOY_CF_API_TOKEN`. The repo ships
   `config.example.toml` with placeholders only.
 
+- **Credentials** (owner's decision):
+  - Hosts: one R2 API token, *Object Read* on the bucket only, shared by all
+    projects. `deploy` never writes to R2 from a host (`publish` runs in CI).
+  - CI: one separate R2 token, *Object Read & Write* on the bucket, stored as
+    org secrets in `econumo` / `winterflow-org` and as repo secrets in
+    personal-account repos. R2 scopes tokens per bucket, not per prefix, so
+    per-project keys would add no isolation.
+  - Cloudflare: one token, *Zone → Cache Purge* only, for the deployed zones;
+    the zone id is per service in state.
+  - `deploy` must work with a read-only key: no write, list-only-what-it-
+    needs (`ListObjectsV2` on the bucket for completion and `versions`).
+
 - `/var/lib/deploy/state.json` — written only by the tool, mode 0644 (no
   secrets, so completion works without sudo). Per service: Cloudflare zone id;
   per ref: channel, installed version, previous version, installed-at.
