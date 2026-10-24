@@ -89,6 +89,9 @@ s3://<bucket>/<project>/<channel>/
     <asset>.service              unit template, one per component
     <asset>.env.example          optional; seeds the env file on first install
     release.json                 {project, version, commit, published_at}
+                                 (version is the channel name for a
+                                 channel-only publish; commit from
+                                 `git rev-parse HEAD` when run in a repo)
     SHA256SUMS                   covers every other file in the folder
 ```
 
@@ -111,12 +114,14 @@ cdn-upload:
 	deploy publish econumo --path release-out --version $(VERSION) --channels $(CHANNELS)
 ```
 
-`deploy publish <project> --path DIR --version V [--channels latest,dev] [--keep N] [--bucket B]`
+`deploy publish <project> --path DIR [--version V] [--channels latest,dev] [--keep N] [--bucket B]`
 
 - `--path` — folder with the built files (binaries, `*.service`, optional
   `*.env.example`).
 - `--version` — the release version, written to `release.json` and used as
-  the immutable channel.
+  the immutable channel. Optional: without it only the `--channels` are
+  updated and no version folder is created — econumo's dev publishes work
+  this way today. At least one of `--version` / `--channels` is required.
 - `--channels` — moving channels to also update (`latest`, `dev`).
 - `--keep` — version channels to keep after publishing, default `10`; `0`
   disables pruning.
@@ -213,7 +218,7 @@ deploy logs      <ref> [--service S] [-n N] [--no-follow]
 deploy run       <ref> [--service S] -- <args...>
 deploy status    [--service S]
 deploy versions  <ref>                     # channels and versions in R2
-deploy publish   <project> --path DIR --version V [--channels C] [--keep N]
+deploy publish   <project> --path DIR [--version V] [--channels C] [--keep N]
 deploy prune     <project> [--keep N] [--older-than D] [--yes]
 deploy self-update [--version V]
 deploy completion bash|zsh|fish
