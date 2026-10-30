@@ -24,9 +24,10 @@ func TestRunSplitsBinaryArgsAfterDash(t *testing.T) {
 	require.NoError(t, sf.Save(s))
 
 	var got []string
-	oldG, oldA, oldE := runGuard, newApp, execFn
-	t.Cleanup(func() { runGuard, newApp, execFn = oldG, oldA, oldE })
+	oldG, oldA, oldE, oldT := runGuard, newApp, execFn, stdinIsTerminal
+	t.Cleanup(func() { runGuard, newApp, execFn, stdinIsTerminal = oldG, oldA, oldE, oldT })
 	runGuard = func(string) error { return nil }
+	stdinIsTerminal = func() bool { return false }
 	newApp = func(out, errOut io.Writer) (*app.App, error) {
 		return &app.App{Out: out, Err: errOut, State: sf, Host: &host.Host{Sys: &host.FakeSys{}, Out: out}}, nil
 	}
@@ -49,9 +50,16 @@ func TestRunSplitsBinaryArgsAfterDash(t *testing.T) {
 		assert.Equal(t, "/opt/econumo-beta/econumo", got[len(got)-len(c.want)-1], c.args)
 		assert.Equal(t, c.want, append([]string(nil), got[len(got)-len(c.want):]...), c.args)
 		assert.Contains(t, got, "--property=User=econumo-beta")
+		assert.Equal(t, "--pipe", got[1], "no terminal: stdio is piped")
 	}
 
+	stdinIsTerminal = func() bool { return true }
 	root := NewRoot(io.Discard, io.Discard)
+	root.SetArgs([]string{"run", "econumo", "--service", "econumo-beta", "--", "x"})
+	require.NoError(t, root.Execute())
+	assert.Equal(t, "--pty", got[1], "terminal: a pty is attached")
+
+	root = NewRoot(io.Discard, io.Discard)
 	root.SetArgs([]string{"run", "--", "x"})
 	assert.Error(t, root.Execute())
 }

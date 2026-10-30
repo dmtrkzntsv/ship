@@ -108,13 +108,13 @@ func (a *App) LogsArgs(refArg, serviceArg string, n int, follow bool) ([]string,
 }
 
 // RunArgs is the systemd-run argv that runs the installed ref's binary
-// with args.
-func (a *App) RunArgs(refArg, serviceArg string, args []string) ([]string, error) {
+// with args; tty says whether the caller has a terminal to attach.
+func (a *App) RunArgs(refArg, serviceArg string, args []string, tty bool) ([]string, error) {
 	_, ref, service, err := a.lookup(refArg, serviceArg)
 	if err != nil {
 		return nil, err
 	}
-	return a.Host.RunArgs(service, ref, args), nil
+	return a.Host.RunArgs(service, ref, args, tty), nil
 }
 
 // Status prints a table of installed refs (all services, or just service)

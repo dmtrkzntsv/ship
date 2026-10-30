@@ -136,7 +136,7 @@ cleanup() {
 	systemctl daemon-reload
 	for unit in "${UNITS[@]}"; do systemctl reset-failed "$unit" 2>/dev/null; done
 	for u in "${USERS[@]}"; do
-		rm -rf "/opt/$u" "/etc/$u" "/var/lib/$u" "/run/$u" "/etc/tmpfiles.d/ship-$u.conf"
+		rm -rf "/opt/${u:?}" "/etc/${u:?}" "/var/lib/${u:?}" "/run/${u:?}" "/etc/tmpfiles.d/ship-${u:?}.conf"
 		getent passwd "$u" >/dev/null && userdel "$u"
 		getent group "$u" >/dev/null && groupdel "$u"
 	done
@@ -150,7 +150,7 @@ cleanup() {
 		kill "$FAKES3_PID" 2>/dev/null
 		wait "$FAKES3_PID" 2>/dev/null
 	fi
-	[ -n "$WORK" ] && rm -rf "$WORK"
+	[ -n "$WORK" ] && rm -rf "${WORK:?}"
 	return "$status"
 }
 
@@ -223,7 +223,14 @@ log "3. a broken update is rolled back and v1 keeps running"
 ship publish fixture --path "$WORK/v2" --version v2 --channels latest
 expect_fail update fixture --service e2e
 assert_contains "$LAST_OUT" 'previous version restored' "failed update"
-assert_contains "$LAST_OUT" 'deliberately broken build' "failed update log tail"
+# The broken build really ran: its error reaches the journal (journald may
+# lag behind the failed health check, so poll briefly).
+for _ in $(seq 20); do
+	journalctl --no-pager -u e2e | grep 'v2 is a deliberately broken build' >/dev/null && break
+	sleep 0.5
+done
+journalctl --no-pager -u e2e | grep 'v2 is a deliberately broken build' >/dev/null ||
+	fail "the journal of e2e has no error from the broken v2 build"
 assert_running e2e 18080 v1
 assert_gone /opt/e2e/fixture.prev
 

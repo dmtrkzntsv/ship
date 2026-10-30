@@ -2,8 +2,10 @@ package cli
 
 import (
 	"errors"
+	"os"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/dmtrkzntsv/ship/internal/app"
 )
@@ -13,6 +15,8 @@ var (
 	runGuard = requireLinuxRoot
 	newApp   = app.New
 	execFn   = execArgv
+	// stdinIsTerminal decides between systemd-run --pty and --pipe.
+	stdinIsTerminal = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
 )
 
 // runArgs requires the ref; when a "--" is given the ref must precede it.
@@ -49,7 +53,7 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			argv, err := a.RunArgs(args[0], service, binaryArgs(cmd, args))
+			argv, err := a.RunArgs(args[0], service, binaryArgs(cmd, args), stdinIsTerminal())
 			if err != nil {
 				return err
 			}

@@ -76,14 +76,14 @@ func TestAppLogsAndRunArgs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"journalctl", "-u", "twillingate-sql.service", "-n", "50"}, argv)
 
-	argv, err = e.app.RunArgs("twillingate-sql", "twillingate", []string{"a"})
+	argv, err = e.app.RunArgs("twillingate-sql", "twillingate", []string{"a"}, true)
 	require.NoError(t, err)
 	assert.Equal(t, "/opt/twillingate/twillingate-sql", argv[len(argv)-2])
 	assert.Equal(t, "a", argv[len(argv)-1])
 
 	_, err = e.app.LogsArgs("econumo", "", 1, false)
 	require.Error(t, err)
-	_, err = e.app.RunArgs("econumo", "", nil)
+	_, err = e.app.RunArgs("econumo", "", nil, false)
 	require.Error(t, err)
 }
 

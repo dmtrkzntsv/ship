@@ -29,12 +29,23 @@ func TestLogsArgsNoUnitFile(t *testing.T) {
 
 func TestRunArgs(t *testing.T) {
 	h, _ := newHost(t)
-	got := h.RunArgs("S", layout.Ref{Project: "P", Component: "N"}, []string{"currency:update-rates", "--x"})
+	got := h.RunArgs("S", layout.Ref{Project: "P", Component: "N"}, []string{"currency:update-rates", "--x"}, true)
 	assert.Equal(t, []string{
 		"systemd-run", "--pty", "--quiet", "--wait", "--collect",
 		"--property=EnvironmentFile=/etc/S/N.env", "--property=User=S",
 		"--property=WorkingDirectory=/var/lib/S", "--property=ReadWritePaths=/var/lib/S",
 		"/opt/S/P-N", "currency:update-rates", "--x",
+	}, got)
+}
+
+func TestRunArgsWithoutTerminal(t *testing.T) {
+	h, _ := newHost(t)
+	got := h.RunArgs("S", layout.Ref{Project: "P"}, []string{"echo", "hi"}, false)
+	assert.Equal(t, []string{
+		"systemd-run", "--pipe", "--quiet", "--wait", "--collect",
+		"--property=EnvironmentFile=/etc/S/P.env", "--property=User=S",
+		"--property=WorkingDirectory=/var/lib/S", "--property=ReadWritePaths=/var/lib/S",
+		"/opt/S/P", "echo", "hi",
 	}, got)
 }
 

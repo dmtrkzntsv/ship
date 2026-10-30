@@ -68,11 +68,17 @@ func (h *Host) logNamespace(unit string) string {
 }
 
 // RunArgs is the systemd-run argv (including argv[0]) that runs the ref's
-// binary with args under the service's user, env file and data dir.
-func (h *Host) RunArgs(service string, ref layout.Ref, args []string) []string {
+// binary with args under the service's user, env file and data dir. With
+// tty the command gets a pseudo-terminal (--pty); without one (scripts, CI)
+// its stdio is passed straight through (--pipe).
+func (h *Host) RunArgs(service string, ref layout.Ref, args []string, tty bool) []string {
 	hp := Paths{}
+	stdio := "--pipe"
+	if tty {
+		stdio = "--pty"
+	}
 	argv := []string{
-		"systemd-run", "--pty", "--quiet", "--wait", "--collect",
+		"systemd-run", stdio, "--quiet", "--wait", "--collect",
 		"--property=EnvironmentFile=" + hp.EnvFile(service, ref.Name()),
 		"--property=User=" + service,
 		"--property=WorkingDirectory=" + hp.DataDir(service),
