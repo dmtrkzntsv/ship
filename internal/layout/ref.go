@@ -31,6 +31,9 @@ func ValidateVersion(v string) error {
 	if IsMoving(v) {
 		return fmt.Errorf("version %q is a moving channel name", v)
 	}
+	if v == "." || v == ".." {
+		return fmt.Errorf("invalid version %q", v)
+	}
 	if !versionRe.MatchString(v) {
 		return fmt.Errorf("invalid version %q: allowed characters are A-Z a-z 0-9 . _ -", v)
 	}

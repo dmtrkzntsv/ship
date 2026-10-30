@@ -63,7 +63,7 @@ func TestValidateVersion(t *testing.T) {
 	for _, ok := range []string{"v1.2.3", "v261024.3", "2026.10.24-1"} {
 		assert.NoError(t, ValidateVersion(ok), ok)
 	}
-	for _, bad := range []string{"latest", "dev", "", "v1/2", "a b"} {
+	for _, bad := range []string{"latest", "dev", "", "v1/2", "a b", ".", ".."} {
 		assert.Error(t, ValidateVersion(bad), bad)
 	}
 }
@@ -157,7 +157,7 @@ func TestValidateChannel(t *testing.T) {
 	for _, ok := range []string{"latest", "dev", "v1.2.3"} {
 		assert.NoError(t, ValidateChannel(ok), ok)
 	}
-	for _, bad := range []string{"a b", ""} {
+	for _, bad := range []string{"a b", "", ".", ".."} {
 		assert.Error(t, ValidateChannel(bad), bad)
 	}
 }
