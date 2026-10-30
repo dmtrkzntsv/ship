@@ -27,6 +27,9 @@ func newPublishCmd() *cobra.Command {
 			if !layout.ValidName(project) {
 				return &usageError{"invalid project name " + project}
 			}
+			if keep < 0 {
+				return &usageError{"--keep must be >= 0"}
+			}
 			a, err := app.New(cmd.OutOrStdout(), cmd.ErrOrStderr())
 			if err != nil {
 				return err

@@ -135,9 +135,15 @@ func Publish(ctx context.Context, st store.Store, o PublishOptions) error {
 	return pruneAfterPublish(ctx, st, o)
 }
 
-// pruneAfterPublish is the single seam where version pruning (--keep) runs
-// once a publish has fully succeeded.
-func pruneAfterPublish(context.Context, store.Store, PublishOptions) error { return nil }
+// pruneAfterPublish runs version pruning (--keep) once a publish has fully
+// succeeded. A failure is returned, but the publish itself stays done.
+func pruneAfterPublish(ctx context.Context, st store.Store, o PublishOptions) error {
+	if o.Keep <= 0 {
+		return nil
+	}
+	_, err := Prune(ctx, st, PruneOptions{Project: o.Project, Keep: o.Keep, Yes: true, Now: o.Now, Out: o.Out})
+	return wrapAccess(err)
+}
 
 func removeStale(ctx context.Context, st store.Store, prefix string, keep []string) error {
 	keepSet := map[string]bool{}
