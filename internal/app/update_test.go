@@ -33,7 +33,10 @@ func TestAppUpdateUsesRememberedChannel(t *testing.T) {
 	require.NoError(t, e.app.Update(context.Background(), app.UpdateArgs{Ref: "econumo", Service: "econumo-beta"}))
 
 	rs := e.state(t).Services["econumo-beta"].Refs["econumo"]
-	assert.Equal(t, &state.RefState{Unit: "econumo-beta", Channel: "dev", Version: "1.5.0", PrevVersion: "1.4.0", InstalledAt: later}, rs)
+	assert.Equal(t, &state.RefState{
+		Unit: "econumo-beta", Channel: "dev", Version: "1.5.0", PrevVersion: "1.4.0",
+		PublishedAt: fixedNow, PrevPublishedAt: fixedNow, InstalledAt: later,
+	}, rs)
 	assert.Equal(t, "econumo-beta: 1.4.0 -> 1.5.0\n", e.out.String())
 	assert.Contains(t, e.sys.Calls, "systemctl restart econumo-beta")
 	assert.Equal(t, "econumo-amd64", readFile(t, e.app.Host.Paths.Bin("econumo-beta", "econumo")))
@@ -146,6 +149,43 @@ func TestAppRollbackNotInstalled(t *testing.T) {
 	err := e.app.Rollback(context.Background(), "econumo", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not installed in service econumo")
+}
+
+// TestAppUpdateRepublishedChannel: a channel-only publish names the channel
+// as its version, so only the publish time tells two builds apart.
+func TestAppUpdateRepublishedChannel(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	first, second := fixedNow.Add(time.Minute), fixedNow.Add(2*time.Minute)
+	publishAt(t, e.store, first, "devonly", "", []string{"dev"}, true, "devonly")
+	require.NoError(t, e.app.Install(ctx, app.InstallArgs{Ref: "devonly", Version: "dev"}))
+	rs := e.state(t).Services["devonly"].Refs["devonly"]
+	assert.Equal(t, "dev", rs.Version)
+	assert.Equal(t, first, rs.PublishedAt)
+
+	publishAt(t, e.store, second, "devonly", "", []string{"dev"}, true, "devonly")
+	e.sys.Calls = nil
+	e.out.Reset()
+	require.NoError(t, e.app.Update(ctx, app.UpdateArgs{Ref: "devonly"}))
+	assert.Contains(t, e.sys.Calls, "systemctl restart devonly")
+	assert.NotContains(t, e.out.String(), "already on")
+	rs = e.state(t).Services["devonly"].Refs["devonly"]
+	assert.Equal(t, second, rs.PublishedAt)
+	assert.Equal(t, "dev", rs.PrevVersion)
+	assert.Equal(t, first, rs.PrevPublishedAt)
+
+	// Nothing new: no restart.
+	e.sys.Calls = nil
+	e.out.Reset()
+	require.NoError(t, e.app.Update(ctx, app.UpdateArgs{Ref: "devonly"}))
+	assert.NotContains(t, e.sys.Calls, "systemctl restart devonly")
+	assert.Contains(t, e.out.String(), "already on dev")
+
+	// Rollback swaps the publish times along with the versions.
+	require.NoError(t, e.app.Rollback(ctx, "devonly", ""))
+	rs = e.state(t).Services["devonly"].Refs["devonly"]
+	assert.Equal(t, first, rs.PublishedAt)
+	assert.Equal(t, second, rs.PrevPublishedAt)
 }
 
 func readFile(t *testing.T, path string) string {

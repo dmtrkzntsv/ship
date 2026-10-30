@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/dmtrkzntsv/ship/internal/host"
 	"github.com/dmtrkzntsv/ship/internal/layout"
@@ -82,9 +83,11 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 		return noUnitError{ref}
 	}
 
-	// Re-installing the running version would only restart the unit and
-	// overwrite the rollback target with the same version.
-	if f.Release.Version == rs.Version {
+	// Re-installing the running release would only restart the unit and
+	// overwrite the rollback target with the same release. A channel-only
+	// publish keeps the channel name as its version, so the publish time
+	// must match too.
+	if f.Release.Version == rs.Version && f.Release.PublishedAt.Equal(rs.PublishedAt) {
 		svc := s.Services[service]
 		if rs.Channel != channel || (args.CFZone != "" && svc.CFZone != args.CFZone) {
 			rs.Channel = channel
@@ -105,6 +108,7 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 
 	old := rs.Version
 	rs.Channel, rs.PrevVersion, rs.Version = channel, old, f.Release.Version
+	rs.PrevPublishedAt, rs.PublishedAt = rs.PublishedAt, f.Release.PublishedAt
 	rs.InstalledAt = a.Now().UTC()
 	zone := s.Services[service].CFZone
 	if args.CFZone != "" {
@@ -113,7 +117,7 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 	if err := a.State.Save(s); err != nil {
 		return err
 	}
-	fmt.Fprintf(a.Out, "%s: %s -> %s\n", rs.Unit, old, rs.Version)
+	fmt.Fprintf(a.Out, "%s: %s -> %s%s\n", rs.Unit, old, rs.Version, republished(old, rs))
 	if args.PurgeCache {
 		if err := a.purgeCache(ctx, zone); err != nil {
 			return fmt.Errorf("update of %s succeeded (not rolled back) but the cache purge failed: %w", rs.Unit, err)
@@ -153,12 +157,22 @@ func (a *App) Rollback(ctx context.Context, refArg, serviceArg string) error {
 
 	old := rs.Version
 	rs.Version, rs.PrevVersion = rs.PrevVersion, old
+	rs.PublishedAt, rs.PrevPublishedAt = rs.PrevPublishedAt, rs.PublishedAt
 	rs.InstalledAt = a.Now().UTC()
 	if err := a.State.Save(s); err != nil {
 		return err
 	}
-	fmt.Fprintf(a.Out, "%s: %s -> %s\n", rs.Unit, old, rs.Version)
+	fmt.Fprintf(a.Out, "%s: %s -> %s%s\n", rs.Unit, old, rs.Version, republished(old, rs))
 	return nil
+}
+
+// republished explains a change between two releases with the same version
+// name (channel-only publishes) by the new one's publish time.
+func republished(old string, rs *state.RefState) string {
+	if old != rs.Version || rs.PublishedAt.IsZero() {
+		return ""
+	}
+	return " (published " + rs.PublishedAt.UTC().Format(time.RFC3339) + ")"
 }
 
 // refService parses ref and resolves the service (default: the ref's project).

@@ -27,11 +27,16 @@ type Service struct {
 }
 
 type RefState struct {
-	Unit        string    `json:"unit"`
-	Channel     string    `json:"channel"`
-	Version     string    `json:"version"`
-	PrevVersion string    `json:"prev_version,omitempty"`
-	InstalledAt time.Time `json:"installed_at"`
+	Unit        string `json:"unit"`
+	Channel     string `json:"channel"`
+	Version     string `json:"version"`
+	PrevVersion string `json:"prev_version,omitempty"`
+	// PublishedAt is the release's publish time. A channel-only publish
+	// records the channel name as its version, so the publish time is what
+	// tells two builds of the same channel apart.
+	PublishedAt     time.Time `json:"published_at,omitzero"`
+	PrevPublishedAt time.Time `json:"prev_published_at,omitzero"`
+	InstalledAt     time.Time `json:"installed_at"`
 }
 
 // File is a state file on disk; its lock file is state.lock in the same dir.

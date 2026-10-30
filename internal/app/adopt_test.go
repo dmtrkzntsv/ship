@@ -60,7 +60,7 @@ func TestAdoptMovesEnvAndSwaps(t *testing.T) {
 	svc := e.state(t).Services["econumo-beta"]
 	require.NotNil(t, svc)
 	assert.Equal(t, "z1", svc.CFZone)
-	assert.Equal(t, &state.RefState{Unit: "econumo-beta", Channel: "dev", Version: "1.4.0", InstalledAt: fixedNow}, svc.Refs["econumo"])
+	assert.Equal(t, &state.RefState{Unit: "econumo-beta", Channel: "dev", Version: "1.4.0", PublishedAt: fixedNow, InstalledAt: fixedNow}, svc.Refs["econumo"])
 	assert.Contains(t, e.out.String(), "/etc/econumo-beta/econumo.env")
 	assert.NotContains(t, e.out.String(), e.root)
 }

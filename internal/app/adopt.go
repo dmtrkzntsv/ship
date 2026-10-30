@@ -74,7 +74,8 @@ func (a *App) Adopt(ctx context.Context, args AdoptArgs) error {
 	svc := s.Service(service)
 	svc.CFZone = args.CFZone
 	svc.Refs[ref.String()] = &state.RefState{
-		Unit: unit, Channel: args.Version, Version: f.Release.Version, InstalledAt: a.Now().UTC(),
+		Unit: unit, Channel: args.Version, Version: f.Release.Version,
+		PublishedAt: f.Release.PublishedAt, InstalledAt: a.Now().UTC(),
 	}
 	if err := a.State.Save(s); err != nil {
 		return fmt.Errorf("%s.service was adopted and is running %s, but saving state failed: %w", unit, f.Release.Version, err)

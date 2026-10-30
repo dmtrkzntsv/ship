@@ -83,7 +83,8 @@ func (a *App) Install(ctx context.Context, args InstallArgs) error {
 		svc.CFZone = args.CFZone
 	}
 	svc.Refs[ref.String()] = &state.RefState{
-		Unit: unit, Channel: args.Version, Version: f.Release.Version, InstalledAt: a.Now().UTC(),
+		Unit: unit, Channel: args.Version, Version: f.Release.Version,
+		PublishedAt: f.Release.PublishedAt, InstalledAt: a.Now().UTC(),
 	}
 	if err := a.State.Save(s); err != nil {
 		return err

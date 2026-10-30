@@ -28,6 +28,12 @@ const unitTmpl = "[Service]\nUser={{USER}}\nEnvironmentFile={{ENV_FILE}}\nExecSt
 // binaries; withUnit adds a unit template) as version and channels.
 func publish(t *testing.T, st *storetest.Mem, project, version string, channels []string, withUnit bool, assets ...string) {
 	t.Helper()
+	publishAt(t, st, fixedNow, project, version, channels, withUnit, assets...)
+}
+
+// publishAt is publish with the given publish time.
+func publishAt(t *testing.T, st *storetest.Mem, at time.Time, project, version string, channels []string, withUnit bool, assets ...string) {
+	t.Helper()
 	dir := t.TempDir()
 	for _, a := range assets {
 		for _, arch := range []string{"amd64", "arm64"} {
@@ -39,7 +45,7 @@ func publish(t *testing.T, st *storetest.Mem, project, version string, channels 
 	}
 	require.NoError(t, release.Publish(context.Background(), st, release.PublishOptions{
 		Project: project, Dir: dir, Version: version, Channels: channels, Keep: 0,
-		Now: func() time.Time { return fixedNow },
+		Now: func() time.Time { return at },
 	}))
 }
 
@@ -110,7 +116,7 @@ func TestAppInstallRecordsState(t *testing.T) {
 	svc := e.state(t).Services["econumo-beta"]
 	require.NotNil(t, svc)
 	assert.Equal(t, "z1", svc.CFZone)
-	assert.Equal(t, &state.RefState{Unit: "econumo-beta", Channel: "dev", Version: "1.4.0", InstalledAt: fixedNow}, svc.Refs["econumo"])
+	assert.Equal(t, &state.RefState{Unit: "econumo-beta", Channel: "dev", Version: "1.4.0", PublishedAt: fixedNow, InstalledAt: fixedNow}, svc.Refs["econumo"])
 
 	p := e.app.Host.Paths
 	assert.FileExists(t, p.Bin("econumo-beta", "econumo"))
