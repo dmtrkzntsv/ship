@@ -213,6 +213,7 @@ assert_mode /opt/e2e/fixture "755 root:root"
 assert_file /etc/tmpfiles.d/ship-e2e.conf
 assert_user e2e
 assert_eq "$(st '.services.e2e.refs.fixture | "\(.unit) \(.channel) \(.version)"')" "e2e latest v1" "state of e2e"
+assert_eq "$(st '.services.e2e.created_user')" true "created_user of e2e"
 assert_mode "$STATE" "644 root:root"
 printf 'PORT=18080\n' >/etc/e2e/fixture.env
 ship start fixture --service e2e
@@ -294,7 +295,14 @@ assert_contains "$out" '^latest +v15 ' "versions"
 # Pruning never affects what is installed.
 assert_running e2e 18080 v3
 
-log "8. a service installed by the old deploy script is adopted, not installed"
+log "8. existing paths are not taken over; the old deploy script's layout is adopted"
+install -d -m 0755 /etc/old
+expect_fail install fixture --service old --version latest
+assert_contains "$LAST_OUT" "won't take over existing paths" "install over an existing /etc/old"
+assert_gone /opt/old
+assert_gone /var/lib/old
+assert_no_user old
+rmdir /etc/old
 useradd --system --user-group --no-create-home --shell /usr/sbin/nologin --home-dir /var/lib/old old
 install -d -m 0755 /opt/old
 install -m 0755 "$WORK/v1/fixture-linux-$ARCH" /opt/old/fixture
@@ -329,6 +337,9 @@ assert_gone /etc/old/env
 assert_eq "$(cat /etc/old/fixture.env)" "PORT=18081" "/etc/old/fixture.env"
 assert_mode /etc/old/fixture.env "640 root:old"
 assert_eq "$(st '.services.old.refs.fixture | "\(.unit) \(.channel)"')" "old latest" "state of old"
+assert_eq "$(st '.services.old.created_user')" true "created_user of old"
+expect_fail rollback fixture --service old
+assert_contains "$LAST_OUT" 'nothing to roll back' "rollback right after adopt"
 assert_eq "$(/opt/old/fixture.prev version)" v1 "/opt/old/fixture.prev version"
 assert_file /opt/old/old.service.prev
 assert_mode /run/old "750 old:old"

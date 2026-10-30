@@ -69,8 +69,11 @@ Build your project, put the finished files in a folder, and publish it:
 ```
 
 `ship publish` writes `release.json` and `SHA256SUMS`, uploads to
-`<project>/<version>/` (refusing to overwrite an existing version), then replaces
-the moving channels (`latest`, `dev`) and prunes old versions (default: keep 10).
+`<project>/<version>/`, then replaces the moving channels (`latest`, `dev`) and
+prunes old versions (default: keep 10; versions a channel points to and the one
+just published are always kept). Versions are immutable: an existing version is
+refused, except a folder left without `SHA256SUMS` by a failed publish (replaced)
+and the identical build (skipped, so a retry still updates the channels).
 
 From a Makefile, so local and CI publishes are identical:
 
@@ -133,6 +136,13 @@ A `<ref>` is `<project>` or `<project>/<component>`. Host-changing commands need
 root. Run `ship <command> --help` for details; tab completion suggests refs,
 services and versions.
 
+`install` never takes over what it did not create: for a service ship does not
+manage yet it refuses if `/opt/S` or `/etc/S` exists, or `/var/lib/S` exists and
+is not owned by user `S` (data kept by an earlier `uninstall` is fine). System
+names such as `root`, `ssh` or `etc` cannot be services. `uninstall --purge`
+deletes the service user only if ship created it. An interrupted `update` or
+`rollback` (Ctrl-C, SIGTERM, SIGHUP) restores the previous version before exiting.
+
 ## Migrating a host from the old deploy script
 
 Hosts installed by the former `econumo-deploy.sh` are taken over in place:
@@ -144,7 +154,9 @@ sudo ship adopt econumo --service econumo --version latest
 `adopt` keeps the user, data directory and unit name, moves the env file to
 `/etc/S/<project>.env`, installs the channel's binary and templated unit, restarts
 with a health check and rolls everything back on failure. It refuses until the
-project publishes a unit template.
+project publishes a unit template. The script's binary and unit are kept as the
+previous pair, but `ship rollback` is unavailable right after `ship adopt` (ship
+does not know their version) until the next `ship update`.
 
 ## Development
 
