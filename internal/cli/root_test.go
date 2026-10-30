@@ -14,5 +14,5 @@ func TestVersionCommand(t *testing.T) {
 	root := NewRoot(&out, io.Discard)
 	root.SetArgs([]string{"version"})
 	require.NoError(t, root.Execute())
-	assert.Equal(t, "ship dev\n", out.String())
+	assert.Equal(t, "ship "+Version+"\n", out.String())
 }
