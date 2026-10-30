@@ -13,9 +13,10 @@ import (
 
 func newVersionsCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "versions <project>",
-		Short: "List the published versions and channels of a project",
-		Args:  cobra.ExactArgs(1),
+		Use:               "versions <project>",
+		Short:             "List the published versions and channels of a project",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeProjects,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref, err := layout.ParseRef(args[0])
 			if err != nil {
@@ -45,7 +46,11 @@ func newVersionsCmd() *cobra.Command {
 				}
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", v.Channel, version, when, humanSize(v.Bytes))
 			}
-			return tw.Flush()
+			if err := tw.Flush(); err != nil {
+				return err
+			}
+			refreshListing(cmd.Context(), st)
+			return nil
 		},
 	}
 }

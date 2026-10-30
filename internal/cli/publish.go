@@ -41,10 +41,14 @@ func newPublishCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return release.Publish(cmd.Context(), st, release.PublishOptions{
+			if err := release.Publish(cmd.Context(), st, release.PublishOptions{
 				Project: project, Dir: path, Version: version, Channels: channels, Keep: keep,
 				Commit: gitCommit(), Now: time.Now, Out: a.Out,
-			})
+			}); err != nil {
+				return err
+			}
+			refreshListing(cmd.Context(), st)
+			return nil
 		},
 	}
 	f := cmd.Flags()
@@ -54,6 +58,7 @@ func newPublishCmd() *cobra.Command {
 	f.IntVar(&keep, "keep", 10, "versions to keep after publishing (0 disables pruning)")
 	f.StringVar(&bucket, "bucket", "", "R2 bucket (overrides config)")
 	_ = cmd.MarkFlagRequired("path")
+	_ = cmd.RegisterFlagCompletionFunc("channels", cobra.FixedCompletions([]string{"latest", "dev"}, cobra.ShellCompDirectiveNoFileComp))
 	return cmd
 }
 

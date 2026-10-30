@@ -20,9 +20,10 @@ func newPruneCmd() *cobra.Command {
 		yes       bool
 	)
 	cmd := &cobra.Command{
-		Use:   "prune <project>",
-		Short: "Delete old versions of a project (dry run unless --yes)",
-		Args:  cobra.ExactArgs(1),
+		Use:               "prune <project>",
+		Short:             "Delete old versions of a project (dry run unless --yes)",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeProjects,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			project := args[0]
 			if !layout.ValidName(project) {

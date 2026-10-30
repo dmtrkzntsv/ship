@@ -21,5 +21,6 @@ func newStatusCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&service, "service", "", "show only this service")
+	registerServiceCompletion(cmd, false)
 	return cmd
 }

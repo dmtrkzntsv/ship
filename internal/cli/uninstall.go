@@ -15,7 +15,8 @@ func newUninstallCmd() *cobra.Command {
 		Long: "Stops, disables and removes the ref's unit, binary and env file. When it is the\n" +
 			"service's last ref, /opt/S, /etc/S and the tmpfiles entry go too. The data dir\n" +
 			"and the service user are kept unless --purge is given.",
-		Args: cobra.ExactArgs(1),
+		ValidArgsFunction: completeInstalledRefs,
+		Args:              cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := requireLinuxRoot("uninstall"); err != nil {
 				return err
@@ -31,5 +32,6 @@ func newUninstallCmd() *cobra.Command {
 	f.StringVar(&service, "service", "", "service the ref is installed in (default: the ref's project)")
 	f.BoolVar(&purge, "purge", false, "with the last ref, also delete the data dir and the service user")
 	f.BoolVar(&purgeCache, "purge-cache", false, "purge the service's Cloudflare cache after uninstalling (needs SHIP_CF_API_TOKEN)")
+	registerServiceCompletion(cmd, false)
 	return cmd
 }

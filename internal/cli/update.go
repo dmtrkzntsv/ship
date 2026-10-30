@@ -10,9 +10,10 @@ func newUpdateCmd() *cobra.Command {
 	var service, version, cfZone string
 	var purgeCache bool
 	cmd := &cobra.Command{
-		Use:   "update <ref>",
-		Short: "Update an installed ref, restart it and roll back if it does not stay up",
-		Args:  cobra.ExactArgs(1),
+		Use:               "update <ref>",
+		Short:             "Update an installed ref, restart it and roll back if it does not stay up",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeInstalledRefs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := requireLinuxRoot("update"); err != nil {
 				return err
@@ -21,7 +22,11 @@ func newUpdateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return a.Update(cmd.Context(), app.UpdateArgs{Ref: args[0], Service: service, Version: version, CFZone: cfZone, PurgeCache: purgeCache})
+			if err := a.Update(cmd.Context(), app.UpdateArgs{Ref: args[0], Service: service, Version: version, CFZone: cfZone, PurgeCache: purgeCache}); err != nil {
+				return err
+			}
+			refreshAfter(cmd, a)
+			return nil
 		},
 	}
 	f := cmd.Flags()
@@ -29,5 +34,7 @@ func newUpdateCmd() *cobra.Command {
 	f.StringVar(&version, "version", "", "channel to update to and remember: a version, latest or dev (default: the remembered channel)")
 	f.StringVar(&cfZone, "cf-zone", "", "set or replace the service's Cloudflare zone id (saved when the update succeeds)")
 	f.BoolVar(&purgeCache, "purge-cache", false, "purge the service's Cloudflare cache after the version changed (needs SHIP_CF_API_TOKEN)")
+	registerServiceCompletion(cmd, false)
+	registerVersionCompletion(cmd)
 	return cmd
 }

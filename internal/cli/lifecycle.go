@@ -9,9 +9,10 @@ import (
 func newLifecycleCmd(action, short string) *cobra.Command {
 	var service string
 	cmd := &cobra.Command{
-		Use:   action + " <ref>",
-		Short: short,
-		Args:  cobra.ExactArgs(1),
+		Use:               action + " <ref>",
+		Short:             short,
+		ValidArgsFunction: completeInstalledRefs,
+		Args:              cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := requireLinuxRoot(action); err != nil {
 				return err
@@ -24,5 +25,6 @@ func newLifecycleCmd(action, short string) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&service, "service", "", "service the ref is installed in (default: the ref's project)")
+	registerServiceCompletion(cmd, false)
 	return cmd
 }

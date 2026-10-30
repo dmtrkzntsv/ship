@@ -37,9 +37,10 @@ func binaryArgs(cmd *cobra.Command, args []string) []string {
 func newRunCmd() *cobra.Command {
 	var service string
 	cmd := &cobra.Command{
-		Use:   "run <ref> [-- args...]",
-		Short: "Run the ref's binary once with its env file, user and data dir",
-		Args:  runArgs,
+		Use:               "run <ref> [-- args...]",
+		Short:             "Run the ref's binary once with its env file, user and data dir",
+		ValidArgsFunction: completeInstalledRefs,
+		Args:              runArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := runGuard("run"); err != nil {
 				return err
@@ -56,5 +57,6 @@ func newRunCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&service, "service", "", "service the ref is installed in (default: the ref's project)")
+	registerServiceCompletion(cmd, false)
 	return cmd
 }
