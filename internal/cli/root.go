@@ -24,6 +24,7 @@ func NewRoot(out, errOut io.Writer) *cobra.Command {
 	root.AddCommand(newPublishCmd())
 	root.AddCommand(newVersionsCmd())
 	root.AddCommand(newPruneCmd())
+	root.AddCommand(newInstallCmd())
 	return root
 }
 

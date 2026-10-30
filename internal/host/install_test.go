@@ -1,0 +1,230 @@
+package host_test
+
+import (
+	"context"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/dmtrkzntsv/ship/internal/host"
+	"github.com/dmtrkzntsv/ship/internal/layout"
+	"github.com/dmtrkzntsv/ship/internal/release"
+)
+
+const sqlUnit = `[Service]
+User={{USER}}
+Group={{USER}}
+EnvironmentFile={{ENV_FILE}}
+Environment=TWSQL_SOCKET={{RUN_DIR}}/sql.sock
+ExecStart={{BIN}}
+ReadOnlyPaths={{DATA_DIR}}
+ReadWritePaths={{RUN_DIR}}
+`
+
+// fetched writes a fake fetched release for twillingate/sql into a temp dir.
+func fetched(t *testing.T, envExample string) release.Fetched {
+	t.Helper()
+	dir := t.TempDir()
+	f := release.Fetched{Dir: dir, Release: release.Release{Project: "twillingate", Version: "v1"}}
+	f.Binary = filepath.Join(dir, "twillingate-sql-linux-amd64")
+	require.NoError(t, os.WriteFile(f.Binary, []byte("binary"), 0o755))
+	f.Unit = filepath.Join(dir, "twillingate-sql.service")
+	require.NoError(t, os.WriteFile(f.Unit, []byte(sqlUnit), 0o644))
+	if envExample != "" {
+		f.EnvExample = filepath.Join(dir, "twillingate-sql.env.example")
+		require.NoError(t, os.WriteFile(f.EnvExample, []byte(envExample), 0o644))
+	}
+	return f
+}
+
+func newHost(t *testing.T) (*host.Host, *host.FakeSys) {
+	t.Helper()
+	fs := &host.FakeSys{}
+	return &host.Host{Paths: host.Paths{Root: t.TempDir()}, Sys: fs, Out: io.Discard}, fs
+}
+
+func target(f release.Fetched) host.Target {
+	return host.Target{Service: "tw", Ref: layout.Ref{Project: "twillingate", Component: "sql"}, Unit: "twillingate-sql", Fetched: f}
+}
+
+func mode(t *testing.T, path string) os.FileMode {
+	t.Helper()
+	fi, err := os.Stat(path)
+	require.NoError(t, err)
+	return fi.Mode().Perm()
+}
+
+func read(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	require.NoError(t, err)
+	return string(b)
+}
+
+func hasCallPrefix(calls []string, prefix string) bool {
+	for _, c := range calls {
+		if strings.HasPrefix(c, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestPaths(t *testing.T) {
+	p := host.Paths{Root: "/r"}
+	assert.Equal(t, "/r/opt/tw", p.BinDir("tw"))
+	assert.Equal(t, "/r/opt/tw/twillingate-sql", p.Bin("tw", "twillingate-sql"))
+	assert.Equal(t, "/r/etc/tw", p.EnvDir("tw"))
+	assert.Equal(t, "/r/etc/tw/sql.env", p.EnvFile("tw", "sql"))
+	assert.Equal(t, "/r/var/lib/tw", p.DataDir("tw"))
+	assert.Equal(t, "/r/run/tw", p.RunDir("tw"))
+	assert.Equal(t, "/r/etc/systemd/system/tw-x.service", p.UnitPath("tw-x"))
+	assert.Equal(t, "/r/opt/tw/tw-x.service.prev", p.UnitBackup("tw", "tw-x"))
+	assert.Equal(t, "/r/etc/tmpfiles.d/ship-tw.conf", p.Tmpfiles("tw"))
+	assert.Equal(t, "/opt/tw", host.Paths{}.BinDir("tw"))
+
+	ph := p.Placeholders("tw", layout.Ref{Project: "twillingate", Component: "sql"}, "twillingate-sql")
+	assert.Equal(t, layout.Placeholders{
+		Service: "tw", Bin: "/opt/tw/twillingate-sql", BinDir: "/opt/tw", EnvFile: "/etc/tw/sql.env",
+		DataDir: "/var/lib/tw", RunDir: "/run/tw", Unit: "twillingate-sql",
+	}, ph)
+}
+
+func TestInstallLaysOutFiles(t *testing.T) {
+	for _, example := range []string{"", "TWSQL_X=1\n"} {
+		h, fs := newHost(t)
+		p := h.Paths
+		require.NoError(t, h.Install(context.Background(), target(fetched(t, example))))
+
+		bin := p.Bin("tw", "twillingate-sql")
+		assert.Equal(t, "binary", read(t, bin))
+		assert.Equal(t, os.FileMode(0o755), mode(t, bin))
+
+		unit := read(t, p.UnitPath("twillingate-sql"))
+		assert.Contains(t, unit, "/run/tw/sql.sock")
+		assert.Contains(t, unit, "ExecStart=/opt/tw/twillingate-sql")
+		assert.Contains(t, unit, "EnvironmentFile=/etc/tw/sql.env")
+		assert.NotContains(t, unit, "{{")
+		assert.NotContains(t, unit, p.Root)
+		assert.Equal(t, os.FileMode(0o644), mode(t, p.UnitPath("twillingate-sql")))
+
+		env := p.EnvFile("tw", "sql")
+		assert.Equal(t, example, read(t, env))
+		assert.Equal(t, os.FileMode(0o640), mode(t, env))
+
+		assert.Equal(t, os.FileMode(0o755), mode(t, p.BinDir("tw")))
+		assert.Equal(t, os.FileMode(0o750), mode(t, p.DataDir("tw")))
+		assert.Equal(t, os.FileMode(0o750), mode(t, p.EnvDir("tw")))
+
+		assert.Contains(t, read(t, p.Tmpfiles("tw")), "d /run/tw 0750 tw tw -")
+
+		calls := fs.Calls
+		assert.Contains(t, calls, "CreateUser tw /var/lib/tw")
+		assert.Contains(t, calls, "CreateTmpfiles "+p.Tmpfiles("tw"))
+		assert.Contains(t, calls, "Chown "+p.DataDir("tw")+" tw:tw")
+		assert.Contains(t, calls, "Chown "+env+" root:tw")
+		assert.True(t, hasCallPrefix(calls, "VerifyUnit "), calls)
+		assert.Contains(t, calls, "DaemonReload")
+		assert.Contains(t, calls, "systemctl enable twillingate-sql")
+		for _, c := range calls {
+			assert.NotContains(t, c, "start", c)
+		}
+		// the unit is verified under its real name, before it is moved into place
+		for _, c := range calls {
+			if path, ok := strings.CutPrefix(c, "VerifyUnit "); ok {
+				assert.Equal(t, "twillingate-sql.service", filepath.Base(path))
+				assert.NotEqual(t, p.UnitPath("twillingate-sql"), path)
+			}
+		}
+		// order: user, tmpfiles, verify, reload, enable
+		idx := func(prefix string) int {
+			for i, c := range calls {
+				if strings.HasPrefix(c, prefix) {
+					return i
+				}
+			}
+			return -1
+		}
+		assert.Less(t, idx("CreateUser"), idx("CreateTmpfiles"))
+		assert.Less(t, idx("CreateTmpfiles"), idx("VerifyUnit"))
+		assert.Less(t, idx("VerifyUnit"), idx("DaemonReload"))
+		assert.Less(t, idx("DaemonReload"), idx("systemctl enable"))
+		// no leftover temp files next to the installed files
+		for _, d := range []string{p.BinDir("tw"), p.EnvDir("tw"), filepath.Dir(p.UnitPath("x"))} {
+			ents, err := os.ReadDir(d)
+			require.NoError(t, err)
+			for _, e := range ents {
+				assert.False(t, strings.HasPrefix(e.Name(), "."), "leftover %s in %s", e.Name(), d)
+			}
+		}
+	}
+}
+
+func TestInstallSkipsExistingUser(t *testing.T) {
+	h, fs := newHost(t)
+	fs.Users = map[string]bool{"tw": true}
+	require.NoError(t, h.Install(context.Background(), target(fetched(t, ""))))
+	assert.False(t, hasCallPrefix(fs.Calls, "CreateUser"), fs.Calls)
+}
+
+func TestInstallKeepsExistingEnv(t *testing.T) {
+	h, _ := newHost(t)
+	env := h.Paths.EnvFile("tw", "sql")
+	require.NoError(t, os.MkdirAll(filepath.Dir(env), 0o750))
+	require.NoError(t, os.WriteFile(env, []byte("SECRET=keep\n"), 0o600))
+
+	require.NoError(t, h.Install(context.Background(), target(fetched(t, "SECRET=example\n"))))
+	assert.Equal(t, "SECRET=keep\n", read(t, env))
+	assert.Equal(t, os.FileMode(0o600), mode(t, env))
+}
+
+func TestInstallVerifyFails(t *testing.T) {
+	h, fs := newHost(t)
+	fs.VerifyErr = errors.New("bad unit")
+	err := h.Install(context.Background(), target(fetched(t, "")))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bad unit")
+	assert.NoFileExists(t, h.Paths.UnitPath("twillingate-sql"))
+	assert.NoFileExists(t, h.Paths.EnvFile("tw", "sql"))
+	assert.False(t, hasCallPrefix(fs.Calls, "systemctl enable"), fs.Calls)
+	assert.False(t, hasCallPrefix(fs.Calls, "DaemonReload"), fs.Calls)
+}
+
+func TestInstallBadTemplateTouchesNothing(t *testing.T) {
+	h, fs := newHost(t)
+	f := fetched(t, "")
+	require.NoError(t, os.WriteFile(f.Unit, []byte("[Service]\nExecStart={{NOPE}}\n"), 0o644))
+	err := h.Install(context.Background(), target(f))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "{{NOPE}}")
+	assert.Empty(t, fs.Calls)
+	ents, err := os.ReadDir(h.Paths.Root)
+	require.NoError(t, err)
+	assert.Empty(t, ents)
+}
+
+func TestForeignUnitAndLegacyLayout(t *testing.T) {
+	h, _ := newHost(t)
+	p := h.Paths
+	assert.False(t, h.ForeignUnit("econumo"))
+	assert.False(t, h.LegacyLayout("econumo", "econumo"))
+
+	write := func(path string) {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, nil, 0o644))
+	}
+	write(p.UnitPath("econumo"))
+	assert.True(t, h.ForeignUnit("econumo"))
+	assert.False(t, h.LegacyLayout("econumo", "econumo"))
+	write(p.Bin("econumo", "econumo"))
+	assert.False(t, h.LegacyLayout("econumo", "econumo"))
+	write(filepath.Join(p.EnvDir("econumo"), "env"))
+	assert.True(t, h.LegacyLayout("econumo", "econumo"))
+	assert.False(t, h.LegacyLayout("econumo", "other"))
+}
