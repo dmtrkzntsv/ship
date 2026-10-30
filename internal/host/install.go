@@ -68,8 +68,7 @@ func (h *Host) Install(ctx context.Context, t Target) error {
 	if err := os.MkdirAll(filepath.Dir(conf), 0o755); err != nil {
 		return err
 	}
-	line := fmt.Sprintf("d %s 0750 %s %s -\n", Paths{}.RunDir(s), s, s)
-	if err := writeFileAtomic(conf, []byte(line), 0o644); err != nil {
+	if err := writeFileAtomic(conf, tmpfilesEntry(s), 0o644); err != nil {
 		return err
 	}
 	if err := h.Sys.CreateTmpfiles(ctx, conf); err != nil {
@@ -146,6 +145,11 @@ func (h *Host) installEnv(t Target) error {
 		return err
 	}
 	return h.Sys.Chown(path, "root:"+t.Service)
+}
+
+// tmpfilesEntry is the tmpfiles.d line that creates /run/S for service s.
+func tmpfilesEntry(s string) []byte {
+	return []byte(fmt.Sprintf("d %s 0750 %s %s -\n", Paths{}.RunDir(s), s, s))
 }
 
 // ForeignUnit reports whether the unit file exists on disk.
