@@ -56,6 +56,7 @@ func TestUninstallOneOfTwo(t *testing.T) {
 
 func uninstallBoth(t *testing.T, purge bool) (*host.Host, *host.FakeSys, *bytes.Buffer) {
 	h, fs, out := installTwo(t)
+	require.NoError(t, os.MkdirAll(h.Paths.RunDir("tw"), 0o750)) // systemd-tmpfiles creates it on a real host
 	ctx := context.Background()
 	require.NoError(t, h.Uninstall(ctx, "tw", sqlRef, "twillingate-sql", false, false))
 	require.NoError(t, h.Uninstall(ctx, "tw", twRef, "twillingate", true, purge))
@@ -65,7 +66,7 @@ func uninstallBoth(t *testing.T, purge bool) (*host.Host, *host.FakeSys, *bytes.
 func TestUninstallLastKeepsDataAndUser(t *testing.T) {
 	h, fs, out := uninstallBoth(t, false)
 	p := h.Paths
-	for _, gone := range []string{p.BinDir("tw"), p.EnvDir("tw"), p.Tmpfiles("tw")} {
+	for _, gone := range []string{p.BinDir("tw"), p.EnvDir("tw"), p.RunDir("tw"), p.Tmpfiles("tw")} {
 		assert.False(t, pathExists(gone), gone)
 	}
 	assert.DirExists(t, p.DataDir("tw"))

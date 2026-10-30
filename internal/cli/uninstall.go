@@ -13,7 +13,7 @@ func newUninstallCmd() *cobra.Command {
 		Use:   "uninstall <ref>",
 		Short: "Remove an installed ref; the last one also removes the service's directories",
 		Long: "Stops, disables and removes the ref's unit, binary and env file. When it is the\n" +
-			"service's last ref, /opt/S, /etc/S and the tmpfiles entry go too. The data dir\n" +
+			"service's last ref, /opt/S, /etc/S, /run/S and the tmpfiles entry go too. The data dir\n" +
 			"and the service user are kept unless --purge is given.",
 		ValidArgsFunction: completeInstalledRefs,
 		Args:              cobra.ExactArgs(1),

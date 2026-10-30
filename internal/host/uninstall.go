@@ -11,9 +11,9 @@ import (
 
 // Uninstall stops, disables and removes the ref's unit, binary (with its
 // .prev), unit backup and env file. When last is set it also removes /opt/S,
-// /etc/S and the tmpfiles entry, and with purge the data dir; the user goes
-// only when the data dir is gone. It tolerates a half-installed ref: stop
-// and disable errors and missing files are ignored.
+// /etc/S, the runtime dir /run/S and its tmpfiles entry, and with purge the
+// data dir; the user goes only when the data dir is gone. It tolerates a
+// half-installed ref: stop and disable errors and missing files are ignored.
 func (h *Host) Uninstall(ctx context.Context, service string, ref layout.Ref, unit string, last, purge bool) error {
 	p := h.Paths
 	in := h.installed(service, ref, unit)
@@ -34,7 +34,7 @@ func (h *Host) Uninstall(ctx context.Context, service string, ref layout.Ref, un
 	if !last {
 		return nil
 	}
-	for _, d := range []string{p.BinDir(service), p.EnvDir(service)} {
+	for _, d := range []string{p.BinDir(service), p.EnvDir(service), p.RunDir(service)} {
 		if err := os.RemoveAll(d); err != nil {
 			return err
 		}
