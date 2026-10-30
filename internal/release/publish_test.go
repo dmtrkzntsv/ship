@@ -93,13 +93,57 @@ func TestPublishVersionAndChannels(t *testing.T) {
 
 func TestPublishRefusesExistingVersion(t *testing.T) {
 	m := storetest.NewMem()
-	m.Objects["econumo/v1.0.0/econumo-linux-amd64"] = storetest.MemObject{Data: []byte("x")}
 	o := opts(fixture(t))
+	o.Version = "v1.0.0"
+	require.NoError(t, release.Publish(context.Background(), m, o))
+	m.PutOrder = nil
+
+	// A different build of the same version.
+	o = opts(fixture(t, "econumo-linux-amd64", "econumo-linux-arm64"))
 	o.Version, o.Channels = "v1.0.0", []string{"latest"}
 	err := release.Publish(context.Background(), m, o)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "already published")
+	assert.Contains(t, err.Error(), "publish a new version")
 	assert.Empty(t, m.PutOrder)
+}
+
+func TestPublishRetriesIncompleteVersion(t *testing.T) {
+	m := storetest.NewMem()
+	// A failed earlier publish left files but no SHA256SUMS.
+	m.Objects["econumo/v1.0.0/econumo-linux-amd64"] = storetest.MemObject{Data: []byte("partial")}
+	m.Objects["econumo/v1.0.0/stray"] = storetest.MemObject{Data: []byte("x")}
+	o := opts(fixture(t))
+	o.Version = "v1.0.0"
+	require.NoError(t, release.Publish(context.Background(), m, o))
+
+	assert.NotContains(t, m.Objects, "econumo/v1.0.0/stray")
+	assert.Equal(t, "data-econumo-linux-amd64", string(m.Objects["econumo/v1.0.0/econumo-linux-amd64"].Data))
+	assert.Contains(t, m.Objects, "econumo/v1.0.0/SHA256SUMS")
+	assert.Contains(t, o.Out.(*bytes.Buffer).String(), "incomplete")
+}
+
+func TestPublishSameBuildContinuesToChannels(t *testing.T) {
+	m := storetest.NewMem()
+	o := opts(fixture(t))
+	o.Version = "v1.0.0"
+	require.NoError(t, release.Publish(context.Background(), m, o))
+	sumsBefore := m.Objects["econumo/v1.0.0/SHA256SUMS"].Data
+	m.PutOrder = nil
+
+	// The same build again (e.g. a retry after the channel upload failed),
+	// published at a different time.
+	o = opts(fixture(t))
+	o.Version, o.Channels = "v1.0.0", []string{"latest"}
+	o.Now = func() time.Time { return fixedNow.Add(time.Hour) }
+	require.NoError(t, release.Publish(context.Background(), m, o))
+
+	for _, k := range m.PutOrder {
+		assert.NotContains(t, k, "econumo/v1.0.0/", "the version folder must not be re-uploaded")
+	}
+	assert.Equal(t, sumsBefore, m.Objects["econumo/v1.0.0/SHA256SUMS"].Data)
+	assert.Contains(t, m.Objects, "econumo/latest/SHA256SUMS")
+	assert.Contains(t, o.Out.(*bytes.Buffer).String(), "already published, continuing")
 }
 
 func TestPublishChannelOnly(t *testing.T) {

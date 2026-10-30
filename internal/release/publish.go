@@ -68,19 +68,16 @@ func Publish(ctx context.Context, st store.Store, o PublishOptions) error {
 		o.Out = io.Discard
 	}
 
-	if o.Version != "" {
-		existing, err := st.List(ctx, o.Project+"/"+o.Version+"/")
-		if err != nil {
-			return err
-		}
-		if len(existing) > 0 {
-			return fmt.Errorf("%s/%s is already published; versions are immutable", o.Project, o.Version)
-		}
-	}
-
 	base, err := sums.Compute(o.Dir, files)
 	if err != nil {
 		return err
+	}
+
+	skipVersion := false
+	if o.Version != "" {
+		if skipVersion, err = checkExistingVersion(ctx, st, o, base); err != nil {
+			return err
+		}
 	}
 
 	// Each target folder gets its own release.json (the version field is the
@@ -110,7 +107,7 @@ func Publish(ctx context.Context, st store.Store, o PublishOptions) error {
 		return putBytes(ctx, st, prefix+SumsFile, sm.Marshal(), put)
 	}
 
-	if o.Version != "" {
+	if o.Version != "" && !skipVersion {
 		prefix := o.Project + "/" + o.Version + "/"
 		if err := upload(prefix, o.Version, immutableCacheControl); err != nil {
 			return err
@@ -135,14 +132,68 @@ func Publish(ctx context.Context, st store.Store, o PublishOptions) error {
 	return pruneAfterPublish(ctx, st, o)
 }
 
+// checkExistingVersion looks at an existing <project>/<version>/ folder.
+// One without SHA256SUMS is left over from a failed publish: its objects are
+// deleted and the version is published normally. One whose SHA256SUMS lists
+// exactly the files of this build (release.json aside) is already published:
+// skip reports that its upload can be skipped. Anything else is refused,
+// because versions are immutable.
+func checkExistingVersion(ctx context.Context, st store.Store, o PublishOptions, base sums.Sums) (skip bool, err error) {
+	prefix := o.Project + "/" + o.Version + "/"
+	existing, err := st.List(ctx, prefix)
+	if err != nil || len(existing) == 0 {
+		return false, err
+	}
+	raw, err := readAll(ctx, st, prefix+SumsFile)
+	if errors.Is(err, store.ErrNotFound) {
+		fmt.Fprintf(o.Out, "%s is incomplete (no %s): deleting it and publishing again\n", prefix, SumsFile)
+		keys := make([]string, 0, len(existing))
+		for _, ob := range existing {
+			keys = append(keys, ob.Key)
+		}
+		return false, wrapAccess(st.Delete(ctx, keys))
+	}
+	if err != nil {
+		return false, err
+	}
+	if old, perr := sums.Parse(raw); perr == nil && sameBuild(old, base) {
+		fmt.Fprintf(o.Out, "%s already published, continuing\n", prefix)
+		return true, nil
+	}
+	return false, fmt.Errorf("%s/%s is already published with different files; versions are immutable, publish a new version", o.Project, o.Version)
+}
+
+// sameBuild reports whether published lists exactly the files and digests
+// of build, ignoring release.json.
+func sameBuild(published, build sums.Sums) bool {
+	n := 0
+	for name, digest := range published {
+		if name == ReleaseFile {
+			continue
+		}
+		if build[name] != digest {
+			return false
+		}
+		n++
+	}
+	return n == len(build)
+}
+
 // pruneAfterPublish runs version pruning (--keep) once a publish has fully
-// succeeded. A failure is returned, but the publish itself stays done.
+// succeeded. The version just published is protected, so a clock running
+// behind the one that published older versions cannot get it deleted. A
+// failure is returned (Prune already explains a read-only key), but the
+// publish itself stays done.
 func pruneAfterPublish(ctx context.Context, st store.Store, o PublishOptions) error {
 	if o.Keep <= 0 {
 		return nil
 	}
-	_, err := Prune(ctx, st, PruneOptions{Project: o.Project, Keep: o.Keep, Yes: true, Now: o.Now, Out: o.Out})
-	return wrapAccess(err)
+	po := PruneOptions{Project: o.Project, Keep: o.Keep, Yes: true, Now: o.Now, Out: o.Out}
+	if o.Version != "" {
+		po.Protect = []string{o.Version}
+	}
+	_, err := Prune(ctx, st, po)
+	return err
 }
 
 func removeStale(ctx context.Context, st store.Store, prefix string, keep []string) error {

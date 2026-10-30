@@ -16,6 +16,9 @@ type PruneOptions struct {
 	Project   string
 	Keep      int
 	OlderThan time.Duration // 0: no age filter
+	// Protect names versions that are never deleted and do not count toward
+	// Keep, like versions a moving channel points to.
+	Protect []string
 	Yes       bool
 	Now       func() time.Time
 	Out       io.Writer
@@ -52,11 +55,22 @@ func Prune(ctx context.Context, st store.Store, o PruneOptions) (PrunePlan, erro
 		return plan, err
 	}
 
+	// A moving channel whose release.json cannot be read might point to any
+	// version; pruning without knowing which could delete it.
 	pointed := map[string]bool{}
 	for _, v := range all {
-		if layout.IsMoving(v.Channel) && v.Release != nil && !layout.IsMoving(v.Release.Version) {
+		if !layout.IsMoving(v.Channel) {
+			continue
+		}
+		if v.Release == nil {
+			return plan, fmt.Errorf("cannot prune %s: channel %s has no readable %s", o.Project, v.Channel, ReleaseFile)
+		}
+		if !layout.IsMoving(v.Release.Version) {
 			pointed[v.Release.Version] = true
 		}
+	}
+	for _, name := range o.Protect {
+		pointed[name] = true
 	}
 	var candidates []VersionInfo
 	for _, v := range all {
@@ -69,7 +83,7 @@ func Prune(ctx context.Context, st store.Store, o PruneOptions) (PrunePlan, erro
 			candidates = append(candidates, v)
 		}
 	}
-	// Names a channel points to that no longer exist are protected too.
+	// Protected names that no longer exist are listed too.
 	var missing []string
 	for name := range pointed {
 		missing = append(missing, name)

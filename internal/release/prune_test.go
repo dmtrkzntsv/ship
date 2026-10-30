@@ -174,8 +174,10 @@ func TestPublishAutoPrunes(t *testing.T) {
 		return release.Publish(context.Background(), m, o)
 	}
 
+	// v4 is protected and does not count toward keep, like a version a
+	// moving channel points to.
 	m := setup()
-	require.NoError(t, publishV4(m, 2))
+	require.NoError(t, publishV4(m, 1))
 	for _, v := range []string{"v1", "v2"} {
 		assert.NotContains(t, m.Objects, "econumo/"+v+"/release.json")
 	}
@@ -199,4 +201,50 @@ func TestPublishAutoPrunes(t *testing.T) {
 	err = publishV4(m, 2)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "read-only")
+}
+
+func TestPruneRefusesUnreadableMovingChannel(t *testing.T) {
+	for name, corrupt := range map[string]func(m *storetest.Mem){
+		"missing":   func(m *storetest.Mem) { delete(m.Objects, "econumo/latest/release.json") },
+		"garbage":   func(m *storetest.Mem) { m.Objects["econumo/latest/release.json"] = storetest.MemObject{Data: []byte("{nope")} },
+		"zero date": func(m *storetest.Mem) { m.Objects["econumo/latest/release.json"] = storetest.MemObject{Data: []byte(`{"version":"v13"}`)} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := prunable(t)
+			corrupt(m)
+			before := len(m.Objects)
+			_, err := release.Prune(context.Background(), m, release.PruneOptions{Project: "econumo", Keep: 1, Yes: true})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "cannot prune econumo: channel latest has no readable release.json")
+			assert.Len(t, m.Objects, before, "nothing may be deleted")
+		})
+	}
+}
+
+func TestPublishAutoPruneProtectsNewVersion(t *testing.T) {
+	m := storetest.NewMem()
+	// Versions published by a machine whose clock ran ahead of this one.
+	for i := 1; i <= 3; i++ {
+		seed(t, m, fmt.Sprintf("v%d", i), fmt.Sprintf("v%d", i), fixedNow.AddDate(0, 0, i), 10)
+	}
+	o := opts(fixture(t))
+	o.Version, o.Keep = "v4", 1
+	require.NoError(t, release.Publish(context.Background(), m, o))
+	assert.Contains(t, m.Objects, "econumo/v4/SHA256SUMS", "the version just published must survive auto-prune")
+	assert.Contains(t, m.Objects, "econumo/v3/release.json")
+	assert.NotContains(t, m.Objects, "econumo/v2/release.json")
+	assert.NotContains(t, m.Objects, "econumo/v1/release.json")
+}
+
+func TestPublishAutoPruneReadOnlyMessageOnce(t *testing.T) {
+	m := storetest.NewMem()
+	for i := 1; i <= 3; i++ {
+		seed(t, m, fmt.Sprintf("v%d", i), fmt.Sprintf("v%d", i), base.AddDate(0, 0, i-1), 10)
+	}
+	m.FailDelete = func(string) error { return fmt.Errorf("x: %w", store.ErrAccessDenied) }
+	o := opts(fixture(t))
+	o.Version, o.Keep = "v4", 1
+	err := release.Publish(context.Background(), m, o)
+	require.Error(t, err)
+	assert.Equal(t, 1, strings.Count(err.Error(), "R2 refused the write"), err.Error())
 }
