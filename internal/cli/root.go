@@ -27,6 +27,13 @@ func NewRoot(out, errOut io.Writer) *cobra.Command {
 	root.AddCommand(newInstallCmd())
 	root.AddCommand(newUpdateCmd())
 	root.AddCommand(newRollbackCmd())
+	root.AddCommand(newUninstallCmd())
+	root.AddCommand(newLifecycleCmd("start", "Start an installed ref and wait for it to stay up"))
+	root.AddCommand(newLifecycleCmd("stop", "Stop an installed ref"))
+	root.AddCommand(newLifecycleCmd("restart", "Restart an installed ref and wait for it to stay up"))
+	root.AddCommand(newLogsCmd())
+	root.AddCommand(newRunCmd())
+	root.AddCommand(newStatusCmd())
 	return root
 }
 

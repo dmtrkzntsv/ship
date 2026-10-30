@@ -40,3 +40,16 @@ func TestUpdateAndRollbackRequireRoot(t *testing.T) {
 		assert.Contains(t, err.Error(), "ship "+cmd+":")
 	}
 }
+
+func TestOpsCommandsRequireRoot(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root")
+	}
+	for _, cmd := range []string{"uninstall", "start", "stop", "restart", "run"} {
+		root := NewRoot(io.Discard, io.Discard)
+		root.SetArgs([]string{cmd, "econumo"})
+		err := root.Execute()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ship "+cmd+": must run as root")
+	}
+}
