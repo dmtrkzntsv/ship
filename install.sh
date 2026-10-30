@@ -35,7 +35,8 @@ fi
 command -v sha256sum >/dev/null 2>&1 || die "need sha256sum"
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT INT TERM
+trap 'rm -rf "$TMP"' EXIT
+trap 'exit 130' INT TERM
 
 BIN="ship-linux-$ARCH"
 echo "Downloading $BIN from $URL"
@@ -67,6 +68,7 @@ if command -v fish >/dev/null 2>&1; then
 		|| rm -f /etc/fish/completions/ship.fish
 fi
 
+# config.example.toml is an unverified template (not covered by SHA256SUMS).
 if [ ! -e /etc/ship/config.toml ]; then
 	mkdir -p /etc/ship
 	if fetch "$URL/config.example.toml" "$TMP/config.toml"; then

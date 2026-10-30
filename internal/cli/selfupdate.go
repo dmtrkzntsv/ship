@@ -38,10 +38,14 @@ func newSelfUpdateCmd() *cobra.Command {
 			if channel == "" {
 				// Reading state needs no root as long as the file is readable.
 				channel = "latest"
-				if st, err := a.State.Load(); err == nil && st.SelfChannel != "" {
+				st, err := a.State.Load()
+				switch {
+				case err != nil:
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v; using %s\n", err, channel)
+				case st.SelfChannel != "":
 					channel = st.SelfChannel
 				}
-			} else if err := layout.ValidateVersion(channel); err != nil {
+			} else if err := layout.ValidateChannel(channel); err != nil {
 				return err
 			}
 			store, err := a.NewStore()

@@ -37,6 +37,14 @@ func ValidateVersion(v string) error {
 	return nil
 }
 
+// ValidateChannel accepts a moving channel (latest, dev) or a valid version.
+func ValidateChannel(c string) error {
+	if IsMoving(c) {
+		return nil
+	}
+	return ValidateVersion(c)
+}
+
 // ParseRef parses "<project>" or "<project>/<component>".
 func ParseRef(s string) (Ref, error) {
 	parts := strings.Split(s, "/")

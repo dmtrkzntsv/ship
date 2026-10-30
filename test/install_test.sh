@@ -36,7 +36,7 @@ fail() { echo "FAIL: \$*" >&2; exit 1; }
 
 # 1. tampered checksums: must fail and install nothing
 cp /srv/rel/latest/download/SHA256SUMS /tmp/SHA256SUMS.good
-sed 's/^./0/' /tmp/SHA256SUMS.good >/srv/rel/latest/download/SHA256SUMS
+sed 's/^./x/' /tmp/SHA256SUMS.good >/srv/rel/latest/download/SHA256SUMS
 if sh /work/install.sh; then fail "tampered SHA256SUMS was accepted"; fi
 [ ! -e /usr/local/bin/ship ] || fail "binary installed despite checksum mismatch"
 cp /tmp/SHA256SUMS.good /srv/rel/latest/download/SHA256SUMS

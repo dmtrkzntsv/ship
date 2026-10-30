@@ -109,8 +109,5 @@ func validateChannel(ch string) error {
 	if ch == "" {
 		return errors.New("--version is required (a version, latest or dev)")
 	}
-	if layout.IsMoving(ch) {
-		return nil
-	}
-	return layout.ValidateVersion(ch)
+	return layout.ValidateChannel(ch)
 }
