@@ -17,6 +17,8 @@ type FakeSys struct {
 	// ActiveAfterRestart, when set, decides whether a unit is active after
 	// "systemctl start" or "restart"; otherwise it becomes active.
 	ActiveAfterRestart func(unit string) bool
+	// ReloadErr is returned by DaemonReload; EnableErr by "systemctl enable".
+	ReloadErr, EnableErr error
 	// Journal is returned by JournalTail.
 	Journal string
 }
@@ -29,7 +31,7 @@ func (f *FakeSys) record(format string, a ...any) {
 
 func (f *FakeSys) DaemonReload(context.Context) error {
 	f.record("DaemonReload")
-	return nil
+	return f.ReloadErr
 }
 
 func (f *FakeSys) Systemctl(_ context.Context, args ...string) error {
@@ -42,6 +44,8 @@ func (f *FakeSys) Systemctl(_ context.Context, args ...string) error {
 	}
 	verb, unit := args[0], args[len(args)-1]
 	switch verb {
+	case "enable":
+		return f.EnableErr
 	case "restart":
 		if f.RestartErr != nil {
 			return f.RestartErr

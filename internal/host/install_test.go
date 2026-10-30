@@ -27,11 +27,11 @@ ReadOnlyPaths={{DATA_DIR}}
 ReadWritePaths={{RUN_DIR}}
 `
 
-// fetched writes a fake fetched release for twillingate/sql into a temp dir.
+// fetched writes a fake fetched release for project twillingate-sql into a temp dir.
 func fetched(t *testing.T, envExample string) release.Fetched {
 	t.Helper()
 	dir := t.TempDir()
-	f := release.Fetched{Dir: dir, Release: release.Release{Project: "twillingate", Version: "v1"}}
+	f := release.Fetched{Dir: dir, Release: release.Release{Project: "twillingate-sql", Version: "v1"}}
 	f.Binary = filepath.Join(dir, "twillingate-sql-linux-amd64")
 	require.NoError(t, os.WriteFile(f.Binary, []byte("binary"), 0o755))
 	f.Unit = filepath.Join(dir, "twillingate-sql.service")
@@ -50,7 +50,7 @@ func newHost(t *testing.T) (*host.Host, *host.FakeSys) {
 }
 
 func target(f release.Fetched) host.Target {
-	return host.Target{Service: "tw", Ref: layout.Ref{Project: "twillingate", Component: "sql"}, Unit: "twillingate-sql", Fetched: f}
+	return host.Target{Service: "tw", Ref: layout.Ref{Project: "twillingate-sql"}, Unit: "twillingate-sql", Fetched: f}
 }
 
 func mode(t *testing.T, path string) os.FileMode {
@@ -89,9 +89,9 @@ func TestPaths(t *testing.T) {
 	assert.Equal(t, "/r/etc/tmpfiles.d/ship-tw.conf", p.Tmpfiles("tw"))
 	assert.Equal(t, "/opt/tw", host.Paths{}.BinDir("tw"))
 
-	ph := p.Placeholders("tw", layout.Ref{Project: "twillingate", Component: "sql"}, "twillingate-sql")
+	ph := p.Placeholders("tw", layout.Ref{Project: "twillingate-sql"}, "twillingate-sql")
 	assert.Equal(t, layout.Placeholders{
-		Service: "tw", Bin: "/opt/tw/twillingate-sql", BinDir: "/opt/tw", EnvFile: "/etc/tw/sql.env",
+		Service: "tw", Bin: "/opt/tw/twillingate-sql", BinDir: "/opt/tw", EnvFile: "/etc/tw/twillingate-sql.env",
 		DataDir: "/var/lib/tw", RunDir: "/run/tw", Unit: "twillingate-sql",
 	}, ph)
 }
@@ -109,12 +109,12 @@ func TestInstallLaysOutFiles(t *testing.T) {
 		unit := read(t, p.UnitPath("twillingate-sql"))
 		assert.Contains(t, unit, "/run/tw/sql.sock")
 		assert.Contains(t, unit, "ExecStart=/opt/tw/twillingate-sql")
-		assert.Contains(t, unit, "EnvironmentFile=/etc/tw/sql.env")
+		assert.Contains(t, unit, "EnvironmentFile=/etc/tw/twillingate-sql.env")
 		assert.NotContains(t, unit, "{{")
 		assert.NotContains(t, unit, p.Root)
 		assert.Equal(t, os.FileMode(0o644), mode(t, p.UnitPath("twillingate-sql")))
 
-		env := p.EnvFile("tw", "sql")
+		env := p.EnvFile("tw", "twillingate-sql")
 		assert.Equal(t, example, read(t, env))
 		assert.Equal(t, os.FileMode(0o640), mode(t, env))
 
@@ -175,7 +175,7 @@ func TestInstallSkipsExistingUser(t *testing.T) {
 
 func TestInstallKeepsExistingEnv(t *testing.T) {
 	h, _ := newHost(t)
-	env := h.Paths.EnvFile("tw", "sql")
+	env := h.Paths.EnvFile("tw", "twillingate-sql")
 	require.NoError(t, os.MkdirAll(filepath.Dir(env), 0o750))
 	require.NoError(t, os.WriteFile(env, []byte("SECRET=keep\n"), 0o600))
 
@@ -191,7 +191,7 @@ func TestInstallVerifyFails(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "bad unit")
 	assert.NoFileExists(t, h.Paths.UnitPath("twillingate-sql"))
-	assert.NoFileExists(t, h.Paths.EnvFile("tw", "sql"))
+	assert.NoFileExists(t, h.Paths.EnvFile("tw", "twillingate-sql"))
 	assert.False(t, hasCallPrefix(fs.Calls, "systemctl enable"), fs.Calls)
 	assert.False(t, hasCallPrefix(fs.Calls, "DaemonReload"), fs.Calls)
 }
@@ -227,4 +227,27 @@ func TestForeignUnitAndLegacyLayout(t *testing.T) {
 	write(filepath.Join(p.EnvDir("econumo"), "env"))
 	assert.True(t, h.LegacyLayout("econumo", "econumo"))
 	assert.False(t, h.LegacyLayout("econumo", "other"))
+}
+
+func TestInstallLateFailureRemovesUnit(t *testing.T) {
+	for _, name := range []string{"enable", "daemon-reload"} {
+		t.Run(name, func(t *testing.T) {
+			h, fs := newHost(t)
+			if name == "enable" {
+				fs.EnableErr = errors.New("enable failed")
+			} else {
+				fs.ReloadErr = errors.New("reload failed")
+			}
+			err := h.Install(context.Background(), target(fetched(t, "")))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "failed")
+			assert.NoFileExists(t, h.Paths.UnitPath("twillingate-sql"))
+			assert.False(t, h.ForeignUnit("twillingate-sql"))
+
+			fs.EnableErr, fs.ReloadErr, fs.Calls = nil, nil, nil
+			require.NoError(t, h.Install(context.Background(), target(fetched(t, ""))))
+			assert.FileExists(t, h.Paths.UnitPath("twillingate-sql"))
+			assert.Contains(t, fs.Calls, "systemctl enable twillingate-sql")
+		})
+	}
 }

@@ -47,8 +47,9 @@ func fixtureStore(t *testing.T) *storetest.Mem {
 	t.Helper()
 	st := storetest.NewMem()
 	publish(t, st, "econumo", "1.4.0", []string{"dev"}, true, "econumo")
-	publish(t, st, "twillingate", "v2", nil, true, "twillingate", "twillingate-sql")
-	publish(t, st, "winterflow", "v3", nil, true, "winterflow-hub")
+	publish(t, st, "twillingate", "v2", nil, true, "twillingate")
+	publish(t, st, "twillingate-sql", "v5", nil, true, "twillingate-sql")
+	publish(t, st, "winterflow", "v3", nil, true, "winterflow-hub", "winterflow-agent")
 	publish(t, st, "mytool", "v1", nil, false, "mytool")
 	return st
 }
@@ -126,14 +127,33 @@ func TestAppInstallSecondRefUnitName(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	require.NoError(t, e.app.Install(ctx, app.InstallArgs{Ref: "twillingate", Version: "v2"}))
-	require.NoError(t, e.app.Install(ctx, app.InstallArgs{Ref: "twillingate/sql", Service: "twillingate", Version: "v2"}))
+	require.NoError(t, e.app.Install(ctx, app.InstallArgs{Ref: "twillingate-sql", Service: "twillingate", Version: "v5"}))
 
 	s := e.state(t)
 	assert.Equal(t, []string{"twillingate", "twillingate-sql"}, s.Units("twillingate"))
-	assert.Equal(t, "twillingate-sql", s.Services["twillingate"].Refs["twillingate/sql"].Unit)
-	assert.FileExists(t, e.app.Host.Paths.UnitPath("twillingate-sql"))
-	assert.FileExists(t, e.app.Host.Paths.Bin("twillingate", "twillingate-sql"))
-	assert.FileExists(t, e.app.Host.Paths.EnvFile("twillingate", "sql"))
+	assert.Equal(t, "twillingate-sql", s.Services["twillingate"].Refs["twillingate-sql"].Unit)
+	assert.Equal(t, "v5", s.Services["twillingate"].Refs["twillingate-sql"].Version)
+	p := e.app.Host.Paths
+	assert.FileExists(t, p.UnitPath("twillingate-sql"))
+	assert.FileExists(t, p.Bin("twillingate", "twillingate-sql"))
+	assert.Equal(t, filepath.Join(e.root, "etc/twillingate/twillingate-sql.env"), p.EnvFile("twillingate", "twillingate-sql"))
+	assert.FileExists(t, p.EnvFile("twillingate", "twillingate-sql"))
+	assert.Contains(t, e.out.String(), "/etc/twillingate/twillingate-sql.env")
+}
+
+func TestAppInstallSecondComponentUnitName(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	require.NoError(t, e.app.Install(ctx, app.InstallArgs{Ref: "winterflow/hub", Service: "wf", Version: "v3"}))
+	require.NoError(t, e.app.Install(ctx, app.InstallArgs{Ref: "winterflow/agent", Service: "wf", Version: "v3"}))
+
+	s := e.state(t)
+	assert.Equal(t, []string{"wf", "wf-agent"}, s.Units("wf"))
+	assert.Equal(t, "wf-agent", s.Services["wf"].Refs["winterflow/agent"].Unit)
+	p := e.app.Host.Paths
+	assert.FileExists(t, p.UnitPath("wf-agent"))
+	assert.FileExists(t, p.Bin("wf", "winterflow-agent"))
+	assert.FileExists(t, p.EnvFile("wf", "agent"))
 }
 
 func TestAppInstallDefaultService(t *testing.T) {

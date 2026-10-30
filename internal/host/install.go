@@ -30,8 +30,9 @@ type Target struct {
 }
 
 // Install lays out a fetched release for t: user, directories, tmpfiles
-// entry, binary, verified unit and (if absent) env file; then daemon-reload
-// and enable. It never starts the unit. The unit template is rendered before
+// entry, binary, env file (if absent) and verified unit; then daemon-reload
+// and enable (a failure there removes the new unit file again). It never
+// starts the unit. The unit template is rendered before
 // anything on the host is touched, and the unit is only moved into place
 // after `systemd-analyze verify` accepts it.
 func (h *Host) Install(ctx context.Context, t Target) error {
@@ -91,6 +92,13 @@ func (h *Host) Install(ctx context.Context, t Target) error {
 	if err := h.Sys.VerifyUnit(ctx, staged); err != nil {
 		return fmt.Errorf("unit %s.service does not verify: %w", t.Unit, err)
 	}
+	// The env file goes in before the unit: once the unit file is in place it
+	// is the marker a retry refuses on, so nothing fallible may follow it
+	// without undoing it.
+	if err := h.installEnv(t); err != nil {
+		return err
+	}
+
 	unitPath := p.UnitPath(t.Unit)
 	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
 		return err
@@ -98,18 +106,23 @@ func (h *Host) Install(ctx context.Context, t Target) error {
 	if err := writeFileAtomic(unitPath, []byte(rendered), 0o644); err != nil {
 		return err
 	}
-
-	if err := h.installEnv(t); err != nil {
-		return err
-	}
-
 	if err := h.Sys.DaemonReload(ctx); err != nil {
+		h.removeUnit(ctx, unitPath)
 		return fmt.Errorf("daemon-reload: %w", err)
 	}
 	if err := h.Sys.Systemctl(ctx, "enable", t.Unit); err != nil {
+		h.removeUnit(ctx, unitPath)
 		return fmt.Errorf("enable %s: %w", t.Unit, err)
 	}
 	return nil
+}
+
+// removeUnit undoes placing a new unit file after a later install step
+// failed, so a retry is not refused as a foreign unit. Best effort.
+func (h *Host) removeUnit(ctx context.Context, unitPath string) {
+	if err := os.Remove(unitPath); err == nil {
+		_ = h.Sys.DaemonReload(ctx)
+	}
 }
 
 // installEnv creates the ref's env file from the example (or empty) unless
