@@ -8,7 +8,7 @@ import (
 
 func newUninstallCmd() *cobra.Command {
 	var service string
-	var purge bool
+	var purge, purgeCache bool
 	cmd := &cobra.Command{
 		Use:   "uninstall <ref>",
 		Short: "Remove an installed ref; the last one also removes the service's directories",
@@ -24,11 +24,12 @@ func newUninstallCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return a.Uninstall(cmd.Context(), app.UninstallArgs{Ref: args[0], Service: service, Purge: purge})
+			return a.Uninstall(cmd.Context(), app.UninstallArgs{Ref: args[0], Service: service, Purge: purge, PurgeCache: purgeCache})
 		},
 	}
 	f := cmd.Flags()
 	f.StringVar(&service, "service", "", "service the ref is installed in (default: the ref's project)")
 	f.BoolVar(&purge, "purge", false, "with the last ref, also delete the data dir and the service user")
+	f.BoolVar(&purgeCache, "purge-cache", false, "purge the service's Cloudflare cache after uninstalling (needs SHIP_CF_API_TOKEN)")
 	return cmd
 }

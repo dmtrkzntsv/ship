@@ -10,8 +10,8 @@ import (
 	"github.com/dmtrkzntsv/ship/internal/state"
 )
 
-// UninstallArgs are the inputs of `ship uninstall`. PurgeCache is accepted
-// but not acted on yet.
+// UninstallArgs are the inputs of `ship uninstall`. PurgeCache purges the
+// service's Cloudflare zone after a successful uninstall.
 type UninstallArgs struct {
 	Ref, Service      string
 	Purge, PurgeCache bool
@@ -24,6 +24,12 @@ func (a *App) Uninstall(ctx context.Context, args UninstallArgs) error {
 	ref, service, err := refService(args.Ref, args.Service)
 	if err != nil {
 		return err
+	}
+	if args.PurgeCache {
+		// Fail before touching anything; checked again under the lock.
+		if err := a.checkPurge(service, ""); err != nil {
+			return err
+		}
 	}
 	unlock, err := a.State.Lock()
 	if err != nil {
@@ -39,6 +45,12 @@ func (a *App) Uninstall(ctx context.Context, args UninstallArgs) error {
 		return err
 	}
 	svc := s.Services[service]
+	if args.PurgeCache {
+		if err := a.checkPurgeIn(s, service, ""); err != nil {
+			return err
+		}
+	}
+	zone := svc.CFZone // read before the service may be dropped from state
 	last := len(svc.Refs) == 1
 
 	if err := a.Host.Uninstall(ctx, service, ref, rs.Unit, last, args.Purge); err != nil {
@@ -53,6 +65,11 @@ func (a *App) Uninstall(ctx context.Context, args UninstallArgs) error {
 		return err
 	}
 	fmt.Fprintf(a.Out, "uninstalled %s (%s.service)\n", ref, unit)
+	if args.PurgeCache {
+		if err := a.purgeCache(ctx, zone); err != nil {
+			return fmt.Errorf("uninstall of %s succeeded but the cache purge failed: %w", unit, err)
+		}
+	}
 	return nil
 }
 

@@ -5,9 +5,11 @@ package app
 import (
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"time"
 
+	"github.com/dmtrkzntsv/ship/internal/cloudflare"
 	"github.com/dmtrkzntsv/ship/internal/config"
 	"github.com/dmtrkzntsv/ship/internal/host"
 	"github.com/dmtrkzntsv/ship/internal/release"
@@ -24,8 +26,10 @@ type App struct {
 	NewStore func() (store.Store, error)
 	State    state.File
 	Host     *host.Host
-	Arch     string // linux arch of the binaries to install
-	Now      func() time.Time
+	// CF builds the Cloudflare client for an API token.
+	CF   func(token string) *cloudflare.Client
+	Arch string // linux arch of the binaries to install
+	Now  func() time.Time
 }
 
 // New loads the configuration (a missing file is fine; env-only is valid),
@@ -48,6 +52,9 @@ func New(out, errOut io.Writer) (*App, error) {
 		},
 		Arch: release.HostArch(),
 		Now:  time.Now,
+		CF: func(token string) *cloudflare.Client {
+			return &cloudflare.Client{Token: token, HTTP: &http.Client{Timeout: 30 * time.Second}}
+		},
 	}
 	a.NewStore = func() (store.Store, error) {
 		if err := a.Cfg.R2.Validate(); err != nil {

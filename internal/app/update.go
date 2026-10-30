@@ -13,10 +13,12 @@ import (
 
 // UpdateArgs are the inputs of `ship update`. Service defaults to the ref's
 // project; Version, when set, becomes the ref's remembered channel.
-// PurgeCache is accepted but not acted on yet.
+// CFZone, when set, replaces the service's stored Cloudflare zone once the
+// update succeeds; PurgeCache purges the effective zone after an update that
+// changed the version.
 type UpdateArgs struct {
-	Ref, Service, Version string
-	PurgeCache            bool
+	Ref, Service, Version, CFZone string
+	PurgeCache                    bool
 }
 
 // Update fetches the ref's channel and swaps it in on the host with a
@@ -33,6 +35,13 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 		}
 	}
 
+	if args.PurgeCache {
+		// Fail before touching anything; checked again under the lock.
+		if err := a.checkPurge(service, args.CFZone); err != nil {
+			return err
+		}
+	}
+
 	unlock, err := a.State.Lock()
 	if err != nil {
 		return err
@@ -45,6 +54,11 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 	rs, err := installedRef(s, ref, service, args.Version)
 	if err != nil {
 		return err
+	}
+	if args.PurgeCache {
+		if err := a.checkPurgeIn(s, service, args.CFZone); err != nil {
+			return err
+		}
 	}
 	channel := args.Version
 	if channel == "" {
@@ -71,8 +85,12 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 	// Re-installing the running version would only restart the unit and
 	// overwrite the rollback target with the same version.
 	if f.Release.Version == rs.Version {
-		if rs.Channel != channel {
+		svc := s.Services[service]
+		if rs.Channel != channel || (args.CFZone != "" && svc.CFZone != args.CFZone) {
 			rs.Channel = channel
+			if args.CFZone != "" {
+				svc.CFZone = args.CFZone
+			}
 			if err := a.State.Save(s); err != nil {
 				return err
 			}
@@ -88,10 +106,19 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 	old := rs.Version
 	rs.Channel, rs.PrevVersion, rs.Version = channel, old, f.Release.Version
 	rs.InstalledAt = a.Now().UTC()
+	zone := s.Services[service].CFZone
+	if args.CFZone != "" {
+		s.Services[service].CFZone, zone = args.CFZone, args.CFZone
+	}
 	if err := a.State.Save(s); err != nil {
 		return err
 	}
 	fmt.Fprintf(a.Out, "%s: %s -> %s\n", rs.Unit, old, rs.Version)
+	if args.PurgeCache {
+		if err := a.purgeCache(ctx, zone); err != nil {
+			return fmt.Errorf("update of %s succeeded (not rolled back) but the cache purge failed: %w", rs.Unit, err)
+		}
+	}
 	return nil
 }
 
