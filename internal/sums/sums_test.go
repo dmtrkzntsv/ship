@@ -58,15 +58,23 @@ func TestParseBlankLinesAndMalformed(t *testing.T) {
 	}
 }
 
+func TestParseDuplicateName(t *testing.T) {
+	_, err := Parse([]byte(hexOf("a") + "  f\n" + hexOf("b") + "  f\n"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "line 2")
+	assert.Contains(t, err.Error(), "duplicate")
+}
+
 func TestVerify(t *testing.T) {
-	s := Sums{"f": hexOf("content")}
-	assert.NoError(t, s.Verify("f", strings.NewReader("content")))
+	const name = "econumo-linux-amd64"
+	s := Sums{name: hexOf("content")}
+	assert.NoError(t, s.Verify(name, strings.NewReader("content")))
 
-	err := s.Verify("f", strings.NewReader("changed"))
+	err := s.Verify(name, strings.NewReader("changed"))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "f")
+	assert.Contains(t, err.Error(), name+": checksum mismatch")
 
-	err = s.Verify("other", strings.NewReader("content"))
+	err = s.Verify("econumo-darwin-arm64", strings.NewReader("content"))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "other")
+	assert.Contains(t, err.Error(), "econumo-darwin-arm64: not listed")
 }

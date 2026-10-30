@@ -64,7 +64,11 @@ func Parse(b []byte) (Sums, error) {
 		if len(line) < 67 || !isHex64(line[:64]) || line[64] != ' ' || (line[65] != ' ' && line[65] != '*') || line[66:] == "" {
 			return nil, fmt.Errorf("SHA256SUMS line %d: malformed", n)
 		}
-		s[line[66:]] = strings.ToLower(line[:64])
+		name := line[66:]
+		if _, dup := s[name]; dup {
+			return nil, fmt.Errorf("SHA256SUMS line %d: duplicate entry for %s", n, name)
+		}
+		s[name] = strings.ToLower(line[:64])
 	}
 	if err := sc.Err(); err != nil {
 		return nil, err
