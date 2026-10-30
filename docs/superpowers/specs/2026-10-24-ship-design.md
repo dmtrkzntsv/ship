@@ -25,7 +25,7 @@ same way, with:
 ## Goals
 
 - Any project publishes with one `ship publish` call — from its Makefile,
-  locally or in CI — after its own build. In CI, `uses: dmtrkzntsv/deploy@v1`
+  locally or in CI — after its own build. In CI, `uses: dmtrkzntsv/ship@v1`
   only puts `ship` on the PATH.
 - Any host installs, updates, rolls back, operates and removes any project with
   the same commands.
@@ -152,7 +152,7 @@ Behaviour:
 ### The setup Action
 
 Composite action at the repo root (`action.yml`), used as
-`uses: dmtrkzntsv/deploy@v1`. It only installs the released `ship` binary
+`uses: dmtrkzntsv/ship@v1`. It only installs the released `ship` binary
 matching the action's ref onto the PATH (download from the GitHub release,
 verify against its `SHA256SUMS`) — like `actions/setup-go`. Optional input
 `version` overrides which release is installed. It takes no credentials; the
@@ -160,7 +160,7 @@ workflow passes `SHIP_R2_*` from secrets to the `make` step that calls
 `ship publish`:
 
 ```yaml
-- uses: dmtrkzntsv/deploy@v1
+- uses: dmtrkzntsv/ship@v1
 - run: make cdn-upload VERSION=${{ needs.tag.outputs.version }} CHANNELS=latest
   env:
     SHIP_R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
@@ -401,7 +401,7 @@ already installed in the chosen service.
   `generate_completions_from_executable(bin/"ship", "completion")`. It is
   meant for laptops; servers use `install.sh` (`/usr/local/bin`, root).
 - First install on a fresh host, no credentials needed:
-  `curl -fsSL https://github.com/dmtrkzntsv/deploy/releases/latest/download/install.sh | sudo sh`
+  `curl -fsSL https://github.com/dmtrkzntsv/ship/releases/latest/download/install.sh | sudo sh`
   — downloads the binary for the arch from the GitHub release, verifies the
   checksum, installs to `/usr/local/bin`, installs completion, creates
   `/etc/ship/config.toml` from the example if missing.
