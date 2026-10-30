@@ -12,12 +12,23 @@ import (
 
 // Seams for tests.
 var (
-	runGuard = requireLinuxRoot
-	newApp   = app.New
-	execFn   = execArgv
-	// stdinIsTerminal decides between systemd-run --pty and --pipe.
-	stdinIsTerminal = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
+	runGuard   = requireLinuxRoot
+	newApp     = app.New
+	execFn     = execArgv
+	isTerminal = func(fd uintptr) bool { return term.IsTerminal(int(fd)) }
 )
+
+// anyTerminal reports whether stdin, stdout or stderr is a terminal. The
+// run then gets a pty (systemd-run --pty): --pipe would hand the caller's
+// file descriptors, a root terminal among them, to the service user.
+func anyTerminal() bool {
+	for _, f := range []*os.File{os.Stdin, os.Stdout, os.Stderr} {
+		if isTerminal(f.Fd()) {
+			return true
+		}
+	}
+	return false
+}
 
 // runArgs requires the ref; when a "--" is given the ref must precede it.
 func runArgs(cmd *cobra.Command, args []string) error {
@@ -53,7 +64,7 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			argv, err := a.RunArgs(args[0], service, binaryArgs(cmd, args), stdinIsTerminal())
+			argv, err := a.RunArgs(args[0], service, binaryArgs(cmd, args), anyTerminal())
 			if err != nil {
 				return err
 			}

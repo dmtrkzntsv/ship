@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -24,10 +25,10 @@ func TestRunSplitsBinaryArgsAfterDash(t *testing.T) {
 	require.NoError(t, sf.Save(s))
 
 	var got []string
-	oldG, oldA, oldE, oldT := runGuard, newApp, execFn, stdinIsTerminal
-	t.Cleanup(func() { runGuard, newApp, execFn, stdinIsTerminal = oldG, oldA, oldE, oldT })
+	oldG, oldA, oldE, oldT := runGuard, newApp, execFn, isTerminal
+	t.Cleanup(func() { runGuard, newApp, execFn, isTerminal = oldG, oldA, oldE, oldT })
 	runGuard = func(string) error { return nil }
-	stdinIsTerminal = func() bool { return false }
+	isTerminal = func(uintptr) bool { return false }
 	newApp = func(out, errOut io.Writer) (*app.App, error) {
 		return &app.App{Out: out, Err: errOut, State: sf, Host: &host.Host{Sys: &host.FakeSys{}, Out: out}}, nil
 	}
@@ -50,16 +51,20 @@ func TestRunSplitsBinaryArgsAfterDash(t *testing.T) {
 		assert.Equal(t, "/opt/econumo-beta/econumo", got[len(got)-len(c.want)-1], c.args)
 		assert.Equal(t, c.want, append([]string(nil), got[len(got)-len(c.want):]...), c.args)
 		assert.Contains(t, got, "--property=User=econumo-beta")
-		assert.Equal(t, "--pipe", got[1], "no terminal: stdio is piped")
+		assert.Equal(t, "--pipe", got[1], "no terminal on stdin, stdout or stderr: stdio is piped")
 	}
 
-	stdinIsTerminal = func() bool { return true }
-	root := NewRoot(io.Discard, io.Discard)
-	root.SetArgs([]string{"run", "econumo", "--service", "econumo-beta", "--", "x"})
-	require.NoError(t, root.Execute())
-	assert.Equal(t, "--pty", got[1], "terminal: a pty is attached")
+	// Any one terminal among stdin, stdout and stderr means a pty, so a
+	// root terminal is never handed to the service user.
+	for _, tty := range []*os.File{os.Stdin, os.Stdout, os.Stderr} {
+		isTerminal = func(fd uintptr) bool { return fd == tty.Fd() }
+		root := NewRoot(io.Discard, io.Discard)
+		root.SetArgs([]string{"run", "econumo", "--service", "econumo-beta", "--", "x"})
+		require.NoError(t, root.Execute())
+		assert.Equal(t, "--pty", got[1], "terminal on fd %d: a pty is attached", tty.Fd())
+	}
 
-	root = NewRoot(io.Discard, io.Discard)
+	root := NewRoot(io.Discard, io.Discard)
 	root.SetArgs([]string{"run", "--", "x"})
 	assert.Error(t, root.Execute())
 }
