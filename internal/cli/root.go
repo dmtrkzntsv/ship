@@ -2,9 +2,12 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
 )
@@ -39,14 +42,25 @@ func NewRoot(out, errOut io.Writer) *cobra.Command {
 	return root
 }
 
-// Execute runs the CLI and returns the process exit code.
+// Execute runs the CLI and returns the process exit code. SIGINT, SIGTERM
+// and SIGHUP cancel the command's context rather than killing ship, so a
+// host change in progress (an update's health check, say) reverts cleanly.
 func Execute() int {
+	ctx, stop := signalContext()
+	defer stop()
 	root := NewRoot(os.Stdout, os.Stderr)
-	if err := root.Execute(); err != nil {
+	if err := root.ExecuteContext(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	return 0
+}
+
+// signalContext is cancelled by SIGINT, SIGTERM or SIGHUP. Until stop is
+// called further signals are absorbed too, so a revert in progress is not
+// cut short; stop restores the default handling.
+func signalContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 }
 
 // requireLinuxRoot guards host-changing commands.

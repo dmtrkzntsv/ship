@@ -117,10 +117,11 @@ func (h *Host) Install(ctx context.Context, t Target) error {
 }
 
 // removeUnit undoes placing a new unit file after a later install step
-// failed, so a retry is not refused as a foreign unit. Best effort.
+// failed, so a retry is not refused as a foreign unit. Best effort; it runs
+// even if ctx was cancelled (ship was interrupted).
 func (h *Host) removeUnit(ctx context.Context, unitPath string) {
 	if err := os.Remove(unitPath); err == nil {
-		_ = h.Sys.DaemonReload(ctx)
+		_ = h.Sys.DaemonReload(context.WithoutCancel(ctx))
 	}
 }
 

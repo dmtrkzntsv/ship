@@ -11,7 +11,8 @@ const journalLines = 30
 
 // WaitHealthy checks that unit stays active for HealthWait, polling every
 // HealthTick. It fails as soon as the unit is seen inactive; the error
-// carries the last journal lines of the unit.
+// carries the last journal lines of the unit. A cancelled ctx (ship was
+// interrupted) is a failure too, never a pass, so callers revert.
 func (h *Host) WaitHealthy(ctx context.Context, unit string) error {
 	deadline := time.Now().Add(h.HealthWait)
 	tick := h.HealthTick
@@ -19,7 +20,11 @@ func (h *Host) WaitHealthy(ctx context.Context, unit string) error {
 		tick = time.Second
 	}
 	for {
-		if !h.Sys.IsActive(ctx, unit) {
+		active := h.Sys.IsActive(ctx, unit)
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("health check of %s interrupted: %w", unit, err)
+		}
+		if !active {
 			return fmt.Errorf("%s failed to come up%s", unit, h.logTail(ctx, unit))
 		}
 		if !time.Now().Before(deadline) {
@@ -27,7 +32,7 @@ func (h *Host) WaitHealthy(ctx context.Context, unit string) error {
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return fmt.Errorf("health check of %s interrupted: %w", unit, ctx.Err())
 		case <-time.After(min(tick, time.Until(deadline))):
 		}
 	}

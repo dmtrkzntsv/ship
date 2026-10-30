@@ -91,6 +91,36 @@ func TestAppUpdateFailureKeepsState(t *testing.T) {
 	assert.Empty(t, e.out.String())
 }
 
+// TestAppUpdateInterruptedDuringHealthCheck: a signal (ctx cancel) while the
+// new pair is being health-checked restores and restarts the old pair.
+func TestAppUpdateInterruptedDuringHealthCheck(t *testing.T) {
+	e := installedEnv(t)
+	before := e.state(t)
+	p := e.app.Host.Paths
+	unitBefore := readFile(t, p.UnitPath("econumo-beta"))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e.sys.ActiveAfterRestart = func(string) bool {
+		cancel() // the signal arrives while the new binary is up
+		return true
+	}
+
+	err := e.app.Update(ctx, app.UpdateArgs{Ref: "econumo", Service: "econumo-beta"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Contains(t, err.Error(), "previous version restored")
+	assert.Equal(t, before, e.state(t))
+	assert.Equal(t, "econumo-amd64", readFile(t, p.Bin("econumo-beta", "econumo")))
+	assert.Equal(t, unitBefore, readFile(t, p.UnitPath("econumo-beta")))
+	var restarts int
+	for _, c := range e.sys.Calls {
+		if c == "systemctl restart econumo-beta" {
+			restarts++
+		}
+	}
+	assert.Equal(t, 2, restarts, "the new pair, then the restored one: %v", e.sys.Calls)
+}
+
 func TestAppFailedUpdateThenRollback(t *testing.T) {
 	e := installedEnv(t)
 	require.NoError(t, e.app.Update(context.Background(), app.UpdateArgs{Ref: "econumo", Service: "econumo-beta"}))
