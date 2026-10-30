@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"runtime"
 
 	"github.com/spf13/cobra"
 )
@@ -49,8 +48,8 @@ func Execute() int {
 
 // requireLinuxRoot guards host-changing commands.
 func requireLinuxRoot(cmdName string) error {
-	if runtime.GOOS != "linux" {
-		return fmt.Errorf("ship %s: Linux only", cmdName)
+	if err := requireLinux(cmdName); err != nil {
+		return err
 	}
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("ship %s: must run as root (try: sudo ship …)", cmdName)

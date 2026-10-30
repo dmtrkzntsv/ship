@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"errors"
+
 	"github.com/spf13/cobra"
 
 	"github.com/dmtrkzntsv/ship/internal/app"
@@ -17,6 +19,9 @@ func newLogsCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := requireLinux("logs"); err != nil {
 				return err
+			}
+			if lines <= 0 {
+				return errors.New("-n must be positive")
 			}
 			a, err := app.New(cmd.OutOrStdout(), cmd.ErrOrStderr())
 			if err != nil {

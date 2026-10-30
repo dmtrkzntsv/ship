@@ -28,7 +28,6 @@ func installTwo(t *testing.T) (*host.Host, *host.FakeSys, *bytes.Buffer) {
 	require.NoError(t, h.Install(ctx, target(fetched(t, ""))))
 	f := fetched(t, "")
 	require.NoError(t, h.Install(ctx, host.Target{Service: "tw", Ref: twRef, Unit: "twillingate", Fetched: f}))
-	// the second ref's binary is named after its asset
 	fs.Calls = nil
 	return h, fs, out
 }
