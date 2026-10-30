@@ -1,0 +1,19 @@
+[Unit]
+Description=ship e2e fixture ({{UNIT}})
+
+[Service]
+Type=simple
+User={{USER}}
+Group={{USER}}
+EnvironmentFile={{ENV_FILE}}
+Environment=DATA={{DATA_DIR}} RUN={{RUN_DIR}} NAME={{UNIT}}
+WorkingDirectory={{DATA_DIR}}
+ExecStart={{BIN}} serve
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths={{DATA_DIR}} {{RUN_DIR}}
+
+[Install]
+WantedBy=multi-user.target

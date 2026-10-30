@@ -28,7 +28,8 @@ dist:
 	done
 	cd dist && sha256sum ship-* > SHA256SUMS
 
-e2e:
+# Needs root and systemd; see test/e2e/e2e.sh.
+e2e: build
 	test/e2e/e2e.sh
 
 clean:
