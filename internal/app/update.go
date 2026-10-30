@@ -68,6 +68,19 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 		return noUnitError{ref}
 	}
 
+	// Re-installing the running version would only restart the unit and
+	// overwrite the rollback target with the same version.
+	if f.Release.Version == rs.Version {
+		if rs.Channel != channel {
+			rs.Channel = channel
+			if err := a.State.Save(s); err != nil {
+				return err
+			}
+		}
+		fmt.Fprintf(a.Out, "%s: already on %s\n", rs.Unit, rs.Version)
+		return nil
+	}
+
 	if err := a.Host.Update(ctx, host.Target{Service: service, Ref: ref, Unit: rs.Unit, Fetched: f}); err != nil {
 		return err
 	}

@@ -35,8 +35,10 @@ const (
 // Update replaces the ref's binary and unit with the fetched release and
 // restarts its unit (never a sibling's), then waits for it to stay healthy.
 // The new unit is rendered and verified before anything on the host
-// changes; the current pair is kept as .prev. If the swap, daemon-reload,
-// restart or health check fails, both files are restored from .prev and
+// changes. The live pair is staged as a backup beside .prev; only after the
+// health check passes does it replace the .prev pair, so a failed update
+// keeps the existing rollback target. If the swap, daemon-reload, restart
+// or health check fails, both files are restored from the staged backup and
 // the unit is reloaded and restarted on the old pair.
 func (h *Host) Update(ctx context.Context, t Target) error {
 	in := h.installed(t.Service, t.Ref, t.Unit)
@@ -44,20 +46,27 @@ func (h *Host) Update(ctx context.Context, t Target) error {
 	if err != nil {
 		return err
 	}
-	if err := in.backup(); err != nil {
+	b, err := in.backup()
+	if err != nil {
 		return err
 	}
+	defer b.discard() // no-op after commit
 	if err := copyFileAtomic(t.Fetched.Binary, in.bin, binMode); err != nil {
 		return err // the atomic copy left the live binary as it was
 	}
 	if err := writeFileAtomic(in.unitFile, rendered, unitMode); err != nil {
-		if rerr := copyFileAtomic(in.binPrev, in.bin, binMode); rerr != nil {
-			return fmt.Errorf("%w; restoring %s from %s also failed: %v", err, in.bin, in.binPrev, rerr)
+		if rerr := copyFileAtomic(b.bin, in.bin, binMode); rerr != nil {
+			return fmt.Errorf("%w; restoring %s also failed: %v", err, in.bin, rerr)
 		}
 		return err
 	}
 	if err := h.activate(ctx, in.unit); err != nil {
-		return h.revert(ctx, in, in.restore, "update", err)
+		return h.revert(ctx, in, func() error { return in.restore(b) }, "update", err)
+	}
+	if err := in.commit(b); err != nil {
+		// The new pair is running and healthy; only the rollback target is
+		// gone, so report it without failing the update.
+		fmt.Fprintf(h.Out, "warning: %v; rollback of %s is unavailable until the next update\n", err, in.unit)
 	}
 	return nil
 }
@@ -135,31 +144,65 @@ func (h *Host) revert(ctx context.Context, in installed, undo func() error, op s
 	return fmt.Errorf("%s failed, previous version restored: %w", op, cause)
 }
 
-// backup copies the live binary and unit to their .prev files. Both must
+// backupSet is a staged copy of a live binary/unit pair, held in temp
+// files beside the .prev files until an update either commits or discards it.
+type backupSet struct{ bin, unit string }
+
+// backup stages copies of the live binary and unit beside their .prev
+// files, leaving the existing .prev pair untouched. Both live files must
 // exist: updating a ref whose files are missing would leave nothing to
 // restore.
-func (in installed) backup() error {
+func (in installed) backup() (backupSet, error) {
+	var b backupSet
 	for _, f := range []struct {
 		live, prev string
 		mode       os.FileMode
-	}{{in.bin, in.binPrev, binMode}, {in.unitFile, in.unitBackup, unitMode}} {
+		dst        *string
+	}{{in.bin, in.binPrev, binMode, &b.bin}, {in.unitFile, in.unitBackup, unitMode, &b.unit}} {
 		if !exists(f.live) {
-			return fmt.Errorf("%s is missing; is %s installed on this host?", f.live, in.unit)
+			b.discard()
+			return backupSet{}, fmt.Errorf("%s is missing; is %s installed on this host?", f.live, in.unit)
 		}
-		if err := copyFileAtomic(f.live, f.prev, f.mode); err != nil {
-			return fmt.Errorf("back up %s: %w", f.live, err)
+		staged, err := stageCopy(f.live, filepath.Dir(f.prev), f.mode)
+		if err != nil {
+			b.discard()
+			return backupSet{}, fmt.Errorf("back up %s: %w", f.live, err)
 		}
+		*f.dst = staged
+	}
+	return b, nil
+}
+
+// restore copies the staged backup back over the live binary and unit.
+func (in installed) restore(b backupSet) error {
+	if err := copyFileAtomic(b.bin, in.bin, binMode); err != nil {
+		return err
+	}
+	return copyFileAtomic(b.unit, in.unitFile, unitMode)
+}
+
+// commit moves the staged backup over the .prev pair. If only one of the
+// two moves succeeds, both .prev files are removed so a later rollback is
+// refused rather than restoring a mismatched pair.
+func (in installed) commit(b backupSet) error {
+	if err := os.Rename(b.unit, in.unitBackup); err != nil {
+		return fmt.Errorf("keep previous unit as %s: %w", in.unitBackup, err)
+	}
+	if err := os.Rename(b.bin, in.binPrev); err != nil {
+		os.Remove(in.unitBackup)
+		os.Remove(in.binPrev)
+		return fmt.Errorf("keep previous binary as %s: %w", in.binPrev, err)
 	}
 	return nil
 }
 
-// restore copies the .prev binary and unit back over the live ones,
-// keeping the .prev files.
-func (in installed) restore() error {
-	if err := copyFileAtomic(in.binPrev, in.bin, binMode); err != nil {
-		return err
+// discard removes whatever staged backup files remain.
+func (b backupSet) discard() {
+	for _, p := range []string{b.bin, b.unit} {
+		if p != "" {
+			os.Remove(p)
+		}
 	}
-	return copyFileAtomic(in.unitBackup, in.unitFile, unitMode)
 }
 
 // swap exchanges the live binary and unit with their .prev files. If the

@@ -116,7 +116,7 @@ func TestUpdateRestartFailureRollsBack(t *testing.T) {
 	assert.Equal(t, 2, countCalls(fs.Calls, restartCall))
 }
 
-func TestUpdateVerifyFailureRestoresBinary(t *testing.T) {
+func TestUpdateVerifyFailureChangesNothing(t *testing.T) {
 	h, fs := installed(t)
 	p := h.Paths
 	oldUnit := read(t, p.UnitPath("twillingate-sql"))
@@ -127,7 +127,59 @@ func TestUpdateVerifyFailureRestoresBinary(t *testing.T) {
 	assert.Contains(t, err.Error(), "bad unit")
 	assert.Equal(t, "old", read(t, p.Bin("tw", "twillingate-sql")))
 	assert.Equal(t, oldUnit, read(t, p.UnitPath("twillingate-sql")))
+	assert.NoFileExists(t, p.Bin("tw", "twillingate-sql")+".prev")
+	assert.NoFileExists(t, p.UnitBackup("tw", "twillingate-sql"))
 	assert.False(t, hasCallPrefix(fs.Calls, "systemctl"), "no restart: %v", fs.Calls)
+	assertNoTemp(t, p.BinDir("tw"))
+}
+
+func TestUpdateUnitWriteFailureRestoresBinary(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	h, fs := installed(t)
+	p := h.Paths
+	oldUnit := read(t, p.UnitPath("twillingate-sql"))
+	unitDir := filepath.Dir(p.UnitPath("twillingate-sql"))
+	require.NoError(t, os.Chmod(unitDir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(unitDir, 0o755) })
+
+	require.Error(t, h.Update(context.Background(), target(newRelease(t, "new", "unit-new"))))
+	assert.Equal(t, "old", read(t, p.Bin("tw", "twillingate-sql")))
+	assert.Equal(t, oldUnit, read(t, p.UnitPath("twillingate-sql")))
+	assert.NoFileExists(t, p.Bin("tw", "twillingate-sql")+".prev")
+	assert.False(t, hasCallPrefix(fs.Calls, "systemctl"), "no restart: %v", fs.Calls)
+	assertNoTemp(t, p.BinDir("tw"))
+}
+
+func TestFailedUpdateKeepsRollbackTarget(t *testing.T) {
+	h, fs := installed(t)
+	p := h.Paths
+	oldUnit := read(t, p.UnitPath("twillingate-sql"))
+	require.NoError(t, h.Update(context.Background(), target(newRelease(t, "new", "unit-new"))))
+	newUnit := read(t, p.UnitPath("twillingate-sql"))
+
+	fs.ActiveAfterRestart = activeUnless(t, h, "newer")
+	tg := target(newRelease(t, "newer", "unit-newer"))
+	require.Error(t, h.Update(context.Background(), tg))
+	assert.Equal(t, "new", read(t, p.Bin("tw", "twillingate-sql")))
+	assert.Equal(t, newUnit, read(t, p.UnitPath("twillingate-sql")))
+	assert.Equal(t, "old", read(t, p.Bin("tw", "twillingate-sql")+".prev"))
+	assert.Equal(t, oldUnit, read(t, p.UnitBackup("tw", "twillingate-sql")))
+	assertNoTemp(t, p.BinDir("tw"))
+
+	require.NoError(t, h.Rollback(context.Background(), "tw", tg.Ref, tg.Unit))
+	assert.Equal(t, "old", read(t, p.Bin("tw", "twillingate-sql")))
+	assert.Equal(t, oldUnit, read(t, p.UnitPath("twillingate-sql")))
+}
+
+func assertNoTemp(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	for _, e := range entries {
+		assert.False(t, strings.HasSuffix(e.Name(), ".tmp"), "stray temp file %s", e.Name())
+	}
 }
 
 func TestUpdateBadTemplateTouchesNothing(t *testing.T) {
@@ -223,11 +275,6 @@ func TestUpdateKeepsUnitDirLayout(t *testing.T) {
 	h, _ := installed(t)
 	require.NoError(t, h.Update(context.Background(), target(newRelease(t, "new", "unit-new"))))
 	// No stray temp files next to the binary or unit.
-	for _, dir := range []string{h.Paths.BinDir("tw"), filepath.Dir(h.Paths.UnitPath("x"))} {
-		entries, err := os.ReadDir(dir)
-		require.NoError(t, err)
-		for _, e := range entries {
-			assert.False(t, strings.HasSuffix(e.Name(), ".tmp"), e.Name())
-		}
-	}
+	assertNoTemp(t, h.Paths.BinDir("tw"))
+	assertNoTemp(t, filepath.Dir(h.Paths.UnitPath("x")))
 }

@@ -88,6 +88,37 @@ func TestAppUpdateFailureKeepsState(t *testing.T) {
 	assert.Empty(t, e.out.String())
 }
 
+func TestAppFailedUpdateThenRollback(t *testing.T) {
+	e := installedEnv(t)
+	require.NoError(t, e.app.Update(context.Background(), app.UpdateArgs{Ref: "econumo", Service: "econumo-beta"}))
+	publish(t, e.store, "econumo", "1.6.0", []string{"dev"}, true, "econumo")
+	e.sys.ActiveAfterRestart = func(string) bool { return false }
+	require.Error(t, e.app.Update(context.Background(), app.UpdateArgs{Ref: "econumo", Service: "econumo-beta"}))
+	e.sys.ActiveAfterRestart = nil
+	e.out.Reset()
+
+	require.NoError(t, e.app.Rollback(context.Background(), "econumo", "econumo-beta"))
+	rs := e.state(t).Services["econumo-beta"].Refs["econumo"]
+	assert.Equal(t, "1.4.0", rs.Version)
+	assert.Equal(t, "1.5.0", rs.PrevVersion)
+	assert.Equal(t, "econumo-beta: 1.5.0 -> 1.4.0\n", e.out.String())
+}
+
+func TestAppUpdateAlreadyOnVersion(t *testing.T) {
+	e := installedEnv(t)
+	before := e.state(t).Services["econumo-beta"].Refs["econumo"]
+	require.NoError(t, e.app.Update(context.Background(), app.UpdateArgs{Ref: "econumo", Service: "econumo-beta", Version: "1.4.0"}))
+
+	assert.Equal(t, "econumo-beta: already on 1.4.0\n", e.out.String())
+	rs := e.state(t).Services["econumo-beta"].Refs["econumo"]
+	assert.Equal(t, "1.4.0", rs.Channel, "a newly given --version is remembered")
+	assert.Equal(t, "1.4.0", rs.Version)
+	assert.Empty(t, rs.PrevVersion)
+	assert.Equal(t, before.InstalledAt, rs.InstalledAt)
+	assert.Empty(t, e.sys.Calls)
+	assert.NoFileExists(t, e.app.Host.Paths.Bin("econumo-beta", "econumo")+".prev")
+}
+
 func TestAppRollbackState(t *testing.T) {
 	e := installedEnv(t)
 	require.NoError(t, e.app.Update(context.Background(), app.UpdateArgs{Ref: "econumo", Service: "econumo-beta"}))
