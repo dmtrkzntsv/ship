@@ -10,12 +10,14 @@ import (
 // a readable string such as "systemctl enable tw" or "CreateUser tw /var/lib/tw".
 type FakeSys struct {
 	Calls  []string
-	Active map[string]bool // unit -> active, consulted by IsActive
+	Active map[string]bool // unit -> active; set by start/restart/stop, read by IsActive
 	// VerifyErr is returned by VerifyUnit; RestartErr by "systemctl restart".
 	VerifyErr, RestartErr error
 	Users                 map[string]bool // consulted by UserExists; CreateUser adds, DeleteUser removes
-	// ActiveAfterRestart, when set, decides whether a unit is active after
-	// "systemctl start" or "restart"; otherwise it becomes active.
+	// ActiveAfterRestart, when set, is what IsActive returns (it is called on
+	// every IsActive, so it can look at the files on disk) and decides the
+	// Active entry after "systemctl start" or "restart". When nil, IsActive
+	// reads Active and start/restart make the unit active.
 	ActiveAfterRestart func(unit string) bool
 	// ReloadErr is returned by DaemonReload; EnableErr by "systemctl enable".
 	ReloadErr, EnableErr error
@@ -65,6 +67,9 @@ func (f *FakeSys) Systemctl(_ context.Context, args ...string) error {
 
 func (f *FakeSys) IsActive(_ context.Context, unit string) bool {
 	f.record("IsActive %s", unit)
+	if f.ActiveAfterRestart != nil {
+		return f.ActiveAfterRestart(unit)
+	}
 	return f.Active[unit]
 }
 

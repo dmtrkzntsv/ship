@@ -27,3 +27,16 @@ func TestInstallRequiresRoot(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ship install:")
 }
+
+func TestUpdateAndRollbackRequireRoot(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root")
+	}
+	for _, cmd := range []string{"update", "rollback"} {
+		root := NewRoot(io.Discard, io.Discard)
+		root.SetArgs([]string{cmd, "econumo", "--service", "econumo-beta"})
+		err := root.Execute()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ship "+cmd+":")
+	}
+}
