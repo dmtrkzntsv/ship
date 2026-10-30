@@ -53,7 +53,7 @@ func (a *App) Uninstall(ctx context.Context, args UninstallArgs) error {
 	zone := svc.CFZone // read before the service may be dropped from state
 	last := len(svc.Refs) == 1
 
-	if err := a.Host.Uninstall(ctx, service, ref, rs.Unit, last, args.Purge); err != nil {
+	if err := a.Host.Uninstall(ctx, service, ref, rs.Unit, last, args.Purge, svc.CreatedUser); err != nil {
 		return err
 	}
 	unit := rs.Unit

@@ -23,6 +23,9 @@ type FakeSys struct {
 	ReloadErr, EnableErr error
 	// Journal is returned by JournalTail.
 	Journal string
+	// Owners maps a path to its "user:group"; Chown sets it, Owner reads it
+	// (a path never chowned has owner and group "").
+	Owners map[string]string
 }
 
 var _ Sys = (*FakeSys)(nil)
@@ -102,7 +105,20 @@ func (f *FakeSys) DeleteUser(_ context.Context, name string) error {
 
 func (f *FakeSys) Chown(path, owner string) error {
 	f.record("Chown %s %s", path, owner)
+	if f.Owners == nil {
+		f.Owners = map[string]string{}
+	}
+	u, g, hasGroup := strings.Cut(owner, ":")
+	if !hasGroup {
+		_, g, _ = strings.Cut(f.Owners[path], ":")
+	}
+	f.Owners[path] = u + ":" + g
 	return nil
+}
+
+func (f *FakeSys) Owner(path string) (string, string, error) {
+	u, g, _ := strings.Cut(f.Owners[path], ":")
+	return u, g, nil
 }
 
 func (f *FakeSys) CreateTmpfiles(_ context.Context, conf string) error {

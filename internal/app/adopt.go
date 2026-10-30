@@ -28,6 +28,9 @@ func (a *App) Adopt(ctx context.Context, args AdoptArgs) error {
 	if ref.Component != "" {
 		return errors.New("adopt supports plain projects only (the old deploy script installed whole projects)")
 	}
+	if err := checkNewServiceName(service); err != nil {
+		return err
+	}
 	if err := validateChannel(args.Version); err != nil {
 		return err
 	}
@@ -73,6 +76,7 @@ func (a *App) Adopt(ctx context.Context, args AdoptArgs) error {
 
 	svc := s.Service(service)
 	svc.CFZone = args.CFZone
+	svc.CreatedUser = true // the old deploy script created a user per service
 	svc.Refs[ref.String()] = &state.RefState{
 		Unit: unit, Channel: args.Version, Version: f.Release.Version,
 		PublishedAt: f.Release.PublishedAt, InstalledAt: a.Now().UTC(),

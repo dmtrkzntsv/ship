@@ -10,6 +10,7 @@ import (
 	"os/user"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // NewSys returns the real Sys for this host.
@@ -86,6 +87,28 @@ func (linuxSys) Chown(path, owner string) error {
 		}
 	}
 	return os.Chown(path, uid, gid)
+}
+
+// Owner looks up the names of path's owning uid and gid; an id without a
+// name is returned as the number.
+func (linuxSys) Owner(path string) (string, string, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return "", "", err
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "", "", fmt.Errorf("owner of %s: no stat data", path)
+	}
+	uid, gid := strconv.FormatUint(uint64(st.Uid), 10), strconv.FormatUint(uint64(st.Gid), 10)
+	userName, groupName := uid, gid
+	if u, err := user.LookupId(uid); err == nil {
+		userName = u.Username
+	}
+	if g, err := user.LookupGroupId(gid); err == nil {
+		groupName = g.Name
+	}
+	return userName, groupName, nil
 }
 
 func (linuxSys) CreateTmpfiles(ctx context.Context, conf string) error {

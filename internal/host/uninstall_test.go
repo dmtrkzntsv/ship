@@ -38,7 +38,7 @@ func TestUninstallOneOfTwo(t *testing.T) {
 	require.NoError(t, os.WriteFile(p.Bin("tw", "twillingate-sql")+".prev", []byte("p"), 0o755))
 	require.NoError(t, os.WriteFile(p.UnitBackup("tw", "twillingate-sql"), []byte("p"), 0o644))
 
-	require.NoError(t, h.Uninstall(context.Background(), "tw", sqlRef, "twillingate-sql", false, false))
+	require.NoError(t, h.Uninstall(context.Background(), "tw", sqlRef, "twillingate-sql", false, false, true))
 
 	for _, gone := range []string{p.UnitPath("twillingate-sql"), p.Bin("tw", "twillingate-sql"), p.Bin("tw", "twillingate-sql") + ".prev",
 		p.UnitBackup("tw", "twillingate-sql"), p.EnvFile("tw", "twillingate-sql")} {
@@ -58,8 +58,8 @@ func uninstallBoth(t *testing.T, purge bool) (*host.Host, *host.FakeSys, *bytes.
 	h, fs, out := installTwo(t)
 	require.NoError(t, os.MkdirAll(h.Paths.RunDir("tw"), 0o750)) // systemd-tmpfiles creates it on a real host
 	ctx := context.Background()
-	require.NoError(t, h.Uninstall(ctx, "tw", sqlRef, "twillingate-sql", false, false))
-	require.NoError(t, h.Uninstall(ctx, "tw", twRef, "twillingate", true, purge))
+	require.NoError(t, h.Uninstall(ctx, "tw", sqlRef, "twillingate-sql", false, false, true))
+	require.NoError(t, h.Uninstall(ctx, "tw", twRef, "twillingate", true, purge, true))
 	return h, fs, out
 }
 
@@ -106,16 +106,27 @@ func TestUninstallHalfInstalled(t *testing.T) {
 	require.NoError(t, os.Remove(p.EnvFile("tw", "twillingate-sql")))
 	fs.Calls = nil
 
-	require.NoError(t, h.Uninstall(context.Background(), "tw", sqlRef, "twillingate-sql", false, false))
+	require.NoError(t, h.Uninstall(context.Background(), "tw", sqlRef, "twillingate-sql", false, false, true))
 	assert.NoFileExists(t, p.Bin("tw", "twillingate-sql"))
 }
 
 func TestUninstallEverythingMissing(t *testing.T) {
 	h, _ := newHost(t)
-	require.NoError(t, h.Uninstall(context.Background(), "tw", sqlRef, "twillingate-sql", true, true))
+	require.NoError(t, h.Uninstall(context.Background(), "tw", sqlRef, "twillingate-sql", true, true, true))
 }
 
 func pathExists(p string) bool {
 	_, err := os.Lstat(p)
 	return err == nil
+}
+
+func TestUninstallLastPurgeKeepsUserShipDidNotCreate(t *testing.T) {
+	h, fs, out := installTwo(t)
+	ctx := context.Background()
+	require.NoError(t, h.Uninstall(ctx, "tw", sqlRef, "twillingate-sql", false, false, false))
+	require.NoError(t, h.Uninstall(ctx, "tw", twRef, "twillingate", true, true, false))
+	assert.NoDirExists(t, h.Paths.DataDir("tw"))
+	assert.NotContains(t, fs.Calls, "DeleteUser tw")
+	assert.True(t, fs.UserExists("tw"))
+	assert.Empty(t, out.String())
 }

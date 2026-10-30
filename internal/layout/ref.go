@@ -14,6 +14,19 @@ var (
 	versionRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 )
 
+// reservedServices are names install and adopt refuse as a service: system
+// users and top-level directories a service's user, /opt/S, /etc/S or
+// /var/lib/S would collide with.
+var reservedServices = map[string]bool{
+	"root": true, "ship": true, "systemd": true, "ssl": true, "ssh": true, "sshd": true,
+	"nobody": true, "daemon": true, "bin": true, "sys": true, "etc": true, "opt": true,
+	"var": true, "usr": true, "home": true, "tmp": true, "run": true, "proc": true,
+	"dev": true, "boot": true, "lib": true,
+}
+
+// ReservedService reports whether name may not be used as a service name.
+func ReservedService(name string) bool { return reservedServices[name] }
+
 // Ref is a project ref: "<project>" or "<project>/<component>".
 type Ref struct{ Project, Component string }
 

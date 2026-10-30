@@ -14,5 +14,7 @@ type Sys interface {
 	CreateUser(ctx context.Context, name, home string) error
 	DeleteUser(ctx context.Context, name string) error
 	Chown(path, owner string) error // owner is "user" or "user:group"
+	// Owner returns the user and group names owning path (following symlinks).
+	Owner(path string) (user, group string, err error)
 	CreateTmpfiles(ctx context.Context, conf string) error
 }

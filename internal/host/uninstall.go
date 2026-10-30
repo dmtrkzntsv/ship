@@ -12,9 +12,10 @@ import (
 // Uninstall stops, disables and removes the ref's unit, binary (with its
 // .prev), unit backup and env file. When last is set it also removes /opt/S,
 // /etc/S, the runtime dir /run/S and its tmpfiles entry, and with purge the
-// data dir; the user goes only when the data dir is gone. It tolerates a
+// data dir; the user goes only when deleteUser is set (ship created it) and
+// the data dir is gone. It tolerates a
 // half-installed ref: stop and disable errors and missing files are ignored.
-func (h *Host) Uninstall(ctx context.Context, service string, ref layout.Ref, unit string, last, purge bool) error {
+func (h *Host) Uninstall(ctx context.Context, service string, ref layout.Ref, unit string, last, purge, deleteUser bool) error {
 	p := h.Paths
 	in := h.installed(service, ref, unit)
 
@@ -48,10 +49,14 @@ func (h *Host) Uninstall(ctx context.Context, service string, ref layout.Ref, un
 		}
 	}
 	if exists(p.DataDir(service)) {
-		fmt.Fprintf(h.Out, "Data kept at %s (user %s kept); remove it with --purge\n", Paths{}.DataDir(service), service)
+		if deleteUser {
+			fmt.Fprintf(h.Out, "Data kept at %s (user %s kept); remove it with --purge\n", Paths{}.DataDir(service), service)
+		} else {
+			fmt.Fprintf(h.Out, "Data kept at %s; remove it with --purge\n", Paths{}.DataDir(service))
+		}
 		return nil
 	}
-	if h.Sys.UserExists(service) {
+	if deleteUser && h.Sys.UserExists(service) {
 		if err := h.Sys.DeleteUser(ctx, service); err != nil {
 			return fmt.Errorf("delete user %s: %w", service, err)
 		}

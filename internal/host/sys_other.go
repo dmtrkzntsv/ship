@@ -23,4 +23,5 @@ func (otherSys) UserExists(string) bool                           { return false
 func (otherSys) CreateUser(context.Context, string, string) error { return errLinuxOnly }
 func (otherSys) DeleteUser(context.Context, string) error         { return errLinuxOnly }
 func (otherSys) Chown(string, string) error                       { return errLinuxOnly }
+func (otherSys) Owner(string) (string, string, error)             { return "", "", errLinuxOnly }
 func (otherSys) CreateTmpfiles(context.Context, string) error     { return errLinuxOnly }

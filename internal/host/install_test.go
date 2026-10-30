@@ -251,3 +251,61 @@ func TestInstallLateFailureRemovesUnit(t *testing.T) {
 		})
 	}
 }
+
+func TestInstallFailureRemovesWhatItCreated(t *testing.T) {
+	h, fs := newHost(t)
+	fs.VerifyErr = errors.New("bad unit")
+	p := h.Paths
+	require.Error(t, h.Install(context.Background(), target(fetched(t, ""))))
+	for _, gone := range []string{p.BinDir("tw"), p.EnvDir("tw"), p.DataDir("tw"), p.Tmpfiles("tw"), p.RunDir("tw")} {
+		assert.NoFileExists(t, gone)
+		assert.NoDirExists(t, gone)
+	}
+	assert.Contains(t, fs.Calls, "DeleteUser tw")
+	assert.False(t, fs.UserExists("tw"))
+
+	// A retry starts from scratch.
+	fs.VerifyErr = nil
+	require.NoError(t, h.Install(context.Background(), target(fetched(t, ""))))
+	assert.FileExists(t, p.UnitPath("twillingate-sql"))
+}
+
+func TestInstallFailureKeepsWhatExisted(t *testing.T) {
+	h, fs := newHost(t)
+	ctx := context.Background()
+	require.NoError(t, h.Install(ctx, target(fetched(t, ""))))
+	fs.VerifyErr, fs.Calls = errors.New("bad unit"), nil
+	p := h.Paths
+	err := h.Install(ctx, host.Target{Service: "tw", Ref: layout.Ref{Project: "twillingate"}, Unit: "twillingate", Fetched: fetched(t, "")})
+	require.Error(t, err)
+	for _, kept := range []string{p.BinDir("tw"), p.EnvDir("tw"), p.DataDir("tw"), p.Tmpfiles("tw"), p.Bin("tw", "twillingate-sql")} {
+		_, serr := os.Stat(kept)
+		assert.NoError(t, serr, kept)
+	}
+	assert.NoFileExists(t, p.Bin("tw", "twillingate"))
+	assert.False(t, hasCallPrefix(fs.Calls, "DeleteUser"), fs.Calls)
+}
+
+func TestInstallFixesExistingEnvGroup(t *testing.T) {
+	h, fs := newHost(t)
+	env := h.Paths.EnvFile("tw", "twillingate-sql")
+	require.NoError(t, os.MkdirAll(filepath.Dir(env), 0o750))
+	require.NoError(t, os.WriteFile(env, []byte("SECRET=keep\n"), 0o600))
+
+	require.NoError(t, h.Install(context.Background(), target(fetched(t, ""))))
+	assert.Contains(t, fs.Calls, "Chown "+env+" root:tw")
+	assert.Equal(t, "SECRET=keep\n", read(t, env))
+	assert.Equal(t, os.FileMode(0o600), mode(t, env), "a hand-tuned mode is kept")
+}
+
+func TestInstallLeavesEnvWithServiceGroup(t *testing.T) {
+	h, fs := newHost(t)
+	env := h.Paths.EnvFile("tw", "twillingate-sql")
+	require.NoError(t, os.MkdirAll(filepath.Dir(env), 0o750))
+	require.NoError(t, os.WriteFile(env, []byte("SECRET=keep\n"), 0o640))
+	fs.Owners = map[string]string{env: "admin:tw"}
+
+	require.NoError(t, h.Install(context.Background(), target(fetched(t, ""))))
+	assert.False(t, hasCallPrefix(fs.Calls, "Chown "+env), fs.Calls)
+	assert.Equal(t, "admin:tw", fs.Owners[env])
+}
