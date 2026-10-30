@@ -122,3 +122,31 @@ func activeUnlessBin(t *testing.T, h *host.Host, bad string) func(string) bool {
 		return string(b) != bad
 	}
 }
+
+func TestHostAdoptTmpfilesCleanupFailureStillRestartsOldUnit(t *testing.T) {
+	h, fs := legacyHost(t)
+	p := h.Paths
+	conf := p.Tmpfiles("tw")
+	fs.ActiveAfterRestart = func(string) bool {
+		// Turn the entry adopt wrote into a non-empty directory so its
+		// removal fails after the old files are back.
+		if b, err := os.ReadFile(p.Bin("tw", "twillingate-sql")); err == nil && string(b) == "new" {
+			if fi, err := os.Lstat(conf); err == nil && !fi.IsDir() {
+				require.NoError(t, os.Remove(conf))
+				require.NoError(t, os.MkdirAll(filepath.Join(conf, "x"), 0o755))
+			}
+			return false
+		}
+		return true
+	}
+
+	err := h.Adopt(context.Background(), adoptTarget(t))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "adopt failed, previous version restored")
+	assert.Contains(t, err.Error(), "removing tmpfiles entry /etc/tmpfiles.d/ship-tw.conf failed")
+	assert.NotContains(t, err.Error(), "restoring the previous binary and unit failed")
+	assert.Equal(t, 2, countCalls(fs.Calls, "systemctl restart tw"))
+	assert.Equal(t, "script", read(t, p.Bin("tw", "twillingate-sql")))
+	assert.Equal(t, scriptUnit, read(t, p.UnitPath("tw")))
+	assert.Equal(t, "A=1", read(t, filepath.Join(p.EnvDir("tw"), "env")))
+}

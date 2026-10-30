@@ -54,20 +54,29 @@ func (h *Host) Adopt(ctx context.Context, t Target) error {
 		if err := os.Rename(newEnv, oldEnv); err != nil {
 			errs = append(errs, fmt.Errorf("move env file back: %w", err))
 		}
-		if createdConf {
-			errs = append(errs, removeIfExists(p.Tmpfiles(s)))
-		}
 		return errors.Join(errs...)
+	}
+	// fail restores the script's files and restarts the old unit; only then
+	// is a tmpfiles entry adopt created removed, best effort, so a failed
+	// cleanup never keeps the old service down.
+	fail := func(cause error) error {
+		err := h.revert(ctx, in, undo, "adopt", cause)
+		if createdConf {
+			if rerr := removeIfExists(p.Tmpfiles(s)); rerr != nil {
+				err = fmt.Errorf("%w\nwarning: removing tmpfiles entry %s failed: %v", err, Paths{}.Tmpfiles(s), rerr)
+			}
+		}
+		return err
 	}
 
 	if err := copyFileAtomic(t.Fetched.Binary, in.bin, binMode); err != nil {
-		return h.revert(ctx, in, undo, "adopt", err)
+		return fail(err)
 	}
 	if err := writeFileAtomic(in.unitFile, rendered, unitMode); err != nil {
-		return h.revert(ctx, in, undo, "adopt", err)
+		return fail(err)
 	}
 	if err := h.activate(ctx, in.unit); err != nil {
-		return h.revert(ctx, in, undo, "adopt", err)
+		return fail(err)
 	}
 	if err := in.commit(b); err != nil {
 		fmt.Fprintf(h.Out, "warning: %v; rollback of %s is unavailable until the next update\n", err, in.unit)

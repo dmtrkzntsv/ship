@@ -72,5 +72,7 @@ func TestAdoptFlags(t *testing.T) {
 
 	root = NewRoot(io.Discard, io.Discard)
 	root.SetArgs([]string{"adopt", "econumo", "--version", "dev", "--purge-cache"})
-	require.Error(t, root.Execute(), "adopt has no --purge-cache")
+	err = root.Execute()
+	require.Error(t, err, "adopt has no --purge-cache")
+	assert.Contains(t, err.Error(), "unknown flag")
 }
