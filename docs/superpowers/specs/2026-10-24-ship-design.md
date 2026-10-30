@@ -1,6 +1,6 @@
 # ship — one tool to publish and run all lab services
 
-Status: draft, awaiting owner review · 2026-10-24
+Status: approved · 2026-10-29
 
 ## Why
 
