@@ -1,0 +1,8 @@
+[r2]
+endpoint = "https://<account_id>.r2.cloudflarestorage.com"
+access_key_id = "…"
+secret_access_key = "…"
+bucket = "lab"
+
+[cloudflare]
+api_token = "…"     # Zone > Cache Purge on every zone you purge
