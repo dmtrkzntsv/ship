@@ -1,4 +1,4 @@
-# deploy — one tool to publish and run all lab services
+# ship — one tool to publish and run all lab services
 
 Status: draft, awaiting owner review · 2026-10-24
 
@@ -15,18 +15,18 @@ The goal is to deploy every service-based project — econumo, billing,
 twillingate (+ twillingate-sql), winterflow (standalone and distributed) — the
 same way, with:
 
-- one **CLI tool**, `deploy`, written in Go, with its own config and state
+- one **CLI tool**, `ship`, written in Go, with its own config and state
   and shell completion. On a laptop or in CI it publishes a project's built
-  files to the right R2 folder (`deploy publish`, called from each project's
+  files to the right R2 folder (`ship publish`, called from each project's
   Makefile); on a host it installs and operates them;
-- a **setup Action** in this repo that installs `deploy` in a workflow, and a
+- a **setup Action** in this repo that installs `ship` in a workflow, and a
   **Homebrew formula** in `dmtrkzntsv/homebrew-tap`.
 
 ## Goals
 
-- Any project publishes with one `deploy publish` call — from its Makefile,
+- Any project publishes with one `ship publish` call — from its Makefile,
   locally or in CI — after its own build. In CI, `uses: dmtrkzntsv/deploy@v1`
-  only puts `deploy` on the PATH.
+  only puts `ship` on the PATH.
 - Any host installs, updates, rolls back, operates and removes any project with
   the same commands.
 - Each project repo owns how it runs: its systemd unit ships with its release.
@@ -41,13 +41,13 @@ same way, with:
 
 - Building projects. Builds differ too much (cgo/DuckDB on native runners, SPA
   embedding, four winterflow binaries); each project keeps its build and only
-  hands `deploy publish` a folder of finished files.
+  hands `ship publish` a folder of finished files.
 - Docker images, static sites, one-off jobs.
 - Managing dependencies a service needs (Postgres, Redis, Docker, Litestream,
   reverse proxy). Units may reference them; the tool does not install them.
-- Orchestrating several hosts at once. `deploy` acts on the host it runs on.
+- Orchestrating several hosts at once. `ship` acts on the host it runs on.
 - Changing the project repos. Moving econumo, billing, twillingate,
-  twillingate-sql and winterflow onto `deploy publish` and templated units is
+  twillingate-sql and winterflow onto `ship publish` and templated units is
   follow-up work in each repo (listed at the end).
 
 ## Anti-goals (would be a failure even if it works)
@@ -104,17 +104,17 @@ version it runs (`latest` → `v1.4.2`).
 
 ## Publishing
 
-### `deploy publish`
+### `ship publish`
 
 Every project publishes through the same command, called from its own
 Makefile so a local `make publish-dev` and CI do exactly the same thing:
 
 ```make
 cdn-upload:
-	deploy publish econumo --path release-out --version $(VERSION) --channels $(CHANNELS)
+	ship publish econumo --path release-out --version $(VERSION) --channels $(CHANNELS)
 ```
 
-`deploy publish <project> --path DIR [--version V] [--channels latest,dev] [--keep N] [--bucket B]`
+`ship publish <project> --path DIR [--version V] [--channels latest,dev] [--keep N] [--bucket B]`
 
 - `--path` — folder with the built files (binaries, `*.service`, optional
   `*.env.example`).
@@ -131,7 +131,7 @@ Behaviour:
 - Validates the folder before uploading anything: file names match the
   layout; every asset has a binary for at least amd64 and arm64; units
   contain only known placeholders. A binary without a unit is allowed (a
-  *tool* project, like `deploy` itself); `deploy install` refuses such a
+  *tool* project, like `ship` itself); `ship install` refuses such a
   project.
 - Writes `release.json` and `SHA256SUMS` itself (projects no longer do).
 - Uploads to `<project>/<version>/` first; refuses if that folder already
@@ -152,20 +152,20 @@ Behaviour:
 ### The setup Action
 
 Composite action at the repo root (`action.yml`), used as
-`uses: dmtrkzntsv/deploy@v1`. It only installs the released `deploy` binary
+`uses: dmtrkzntsv/deploy@v1`. It only installs the released `ship` binary
 matching the action's ref onto the PATH (download from the GitHub release,
 verify against its `SHA256SUMS`) — like `actions/setup-go`. Optional input
 `version` overrides which release is installed. It takes no credentials; the
-workflow passes `DEPLOY_R2_*` from secrets to the `make` step that calls
-`deploy publish`:
+workflow passes `SHIP_R2_*` from secrets to the `make` step that calls
+`ship publish`:
 
 ```yaml
 - uses: dmtrkzntsv/deploy@v1
 - run: make cdn-upload VERSION=${{ needs.tag.outputs.version }} CHANNELS=latest
   env:
-    DEPLOY_R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-    DEPLOY_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-    DEPLOY_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+    SHIP_R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+    SHIP_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+    SHIP_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
 ```
 
 The repo's own release workflow tags `vX.Y.Z` and moves the major tag (`v1`)
@@ -173,7 +173,7 @@ so `@v1` keeps working.
 
 ### Pruning old versions
 
-`deploy prune <project> [--keep N] [--older-than DURATION] [--yes]`
+`ship prune <project> [--keep N] [--older-than DURATION] [--yes]`
 
 - Version channels are ordered by `published_at` from their `release.json`
   (a folder without one is ordered by its newest object's LastModified and
@@ -183,7 +183,7 @@ so `@v1` keeps working.
 - Never deletes `latest`, `dev`, or any version a moving channel's
   `release.json` currently points to (those do not count toward `N`).
 - Without `--yes` it only prints what it would delete and the bytes freed.
-- Needs write credentials, taken from `DEPLOY_R2_*` environment variables
+- Needs write credentials, taken from `SHIP_R2_*` environment variables
   (as in CI or on a workstation); a host's read-only key fails with a clear
   message.
 - Cannot know what hosts run: a pruned version can no longer be selected with
@@ -198,7 +198,7 @@ so `@v1` keeps working.
 ## The CLI
 
 One static Go binary (`CGO_ENABLED=0`), built for linux amd64/arm64/arm and
-darwin amd64/arm64; on hosts installed at `/usr/local/bin/deploy`. On macOS
+darwin amd64/arm64; on hosts installed at `/usr/local/bin/ship`. On macOS
 only `publish`, `prune`, `versions` and `completion` work; host commands exit
 with "Linux only". Talks to R2 (S3 API) and Cloudflare natively; no aws
 CLI or curl. Shells out only to `systemctl`, `journalctl`, `systemd-run`,
@@ -208,31 +208,31 @@ completion. Every command that changes the host requires root.
 ### Commands
 
 ```
-deploy install   <ref> [--service S] --version V [--cf-zone Z]
-deploy adopt     <ref> [--service S] --version V [--cf-zone Z]
-deploy update    <ref> [--service S] [--version V] [--purge-cache]
-deploy rollback  <ref> [--service S]
-deploy uninstall <ref> [--service S] [--purge] [--purge-cache]
-deploy start|stop|restart <ref> [--service S]
-deploy logs      <ref> [--service S] [-n N] [--no-follow]
-deploy run       <ref> [--service S] -- <args...>
-deploy status    [--service S]
-deploy versions  <ref>                     # channels and versions in R2
-deploy publish   <project> --path DIR [--version V] [--channels C] [--keep N]
-deploy prune     <project> [--keep N] [--older-than D] [--yes]
-deploy self-update [--version V]
-deploy completion bash|zsh|fish
+ship install   <ref> [--service S] --version V [--cf-zone Z]
+ship adopt     <ref> [--service S] --version V [--cf-zone Z]
+ship update    <ref> [--service S] [--version V] [--purge-cache]
+ship rollback  <ref> [--service S]
+ship uninstall <ref> [--service S] [--purge] [--purge-cache]
+ship start|stop|restart <ref> [--service S]
+ship logs      <ref> [--service S] [-n N] [--no-follow]
+ship run       <ref> [--service S] -- <args...>
+ship status    [--service S]
+ship versions  <ref>                     # channels and versions in R2
+ship publish   <project> --path DIR [--version V] [--channels C] [--keep N]
+ship prune     <project> [--keep N] [--older-than D] [--yes]
+ship self-update [--version V]
+ship completion bash|zsh|fish
 ```
 
 Examples:
 
 ```
-deploy install   econumo --service econumo-beta --version dev
-deploy update    econumo --service econumo-beta              # keeps following dev
-deploy install   twillingate     --version latest
-deploy install   twillingate-sql --service twillingate --version latest
-deploy install   winterflow/hub  --service wf --version latest
-deploy run       econumo --service econumo-beta -- currency:update-rates
+ship install   econumo --service econumo-beta --version dev
+ship update    econumo --service econumo-beta              # keeps following dev
+ship install   twillingate     --version latest
+ship install   twillingate-sql --service twillingate --version latest
+ship install   winterflow/hub  --service wf --version latest
+ship run       econumo --service econumo-beta -- currency:update-rates
 ```
 
 ### Paths on the host
@@ -329,7 +329,7 @@ Runs are serialised with a lock on the state file.
 
 ### Config and state
 
-- `/etc/deploy/config.toml` — edited by hand, mode 0600, root:
+- `/etc/ship/config.toml` — edited by hand, mode 0600, root:
 
   ```toml
   [r2]
@@ -342,18 +342,18 @@ Runs are serialised with a lock on the state file.
   api_token = "…"     # Zone > Cache Purge on every zone you purge
   ```
 
-  Environment variables override: `DEPLOY_R2_ENDPOINT`,
-  `DEPLOY_R2_ACCESS_KEY_ID`, `DEPLOY_R2_SECRET_ACCESS_KEY`,
-  `DEPLOY_R2_BUCKET`, `DEPLOY_CF_API_TOKEN`. The repo ships
+  Environment variables override: `SHIP_R2_ENDPOINT`,
+  `SHIP_R2_ACCESS_KEY_ID`, `SHIP_R2_SECRET_ACCESS_KEY`,
+  `SHIP_R2_BUCKET`, `SHIP_CF_API_TOKEN`. The repo ships
   `config.example.toml` with placeholders only.
 
 - **Credentials** (owner's decision):
   - Hosts: one R2 API token, *Object Read* on the bucket only, shared by all
-    projects. `deploy` never writes to R2 from a host (`publish` runs in CI).
+    projects. `ship` never writes to R2 from a host (`publish` runs in CI).
   - Publishing (CI or laptop): one separate R2 token, *Object Read & Write*
-    on the bucket. On a laptop it lives in `~/.config/deploy/config.toml`
-    (same format, mode 0600) or `DEPLOY_R2_*` variables — never in the host's
-    `/etc/deploy/config.toml`. In CI it is stored as
+    on the bucket. On a laptop it lives in `~/.config/ship/config.toml`
+    (same format, mode 0600) or `SHIP_R2_*` variables — never in the host's
+    `/etc/ship/config.toml`. In CI it is stored as
     org secrets in `econumo` / `winterflow-org` and as repo secrets in
     personal-account repos. R2 scopes tokens per bucket, not per prefix, so
     per-project keys would add no isolation.
@@ -362,20 +362,20 @@ Runs are serialised with a lock on the state file.
   - Host commands must work with a read-only key (`ListObjectsV2` and
     `GetObject` only).
   - Config lookup order: environment variables, then
-    `~/.config/deploy/config.toml` when not root, then
-    `/etc/deploy/config.toml`.
+    `~/.config/ship/config.toml` when not root, then
+    `/etc/ship/config.toml`.
 
-- `/var/lib/deploy/state.json` — written only by the tool, mode 0644 (no
+- `/var/lib/ship/state.json` — written only by the tool, mode 0644 (no
   secrets, so completion works without sudo). Per service: Cloudflare zone id;
   per ref: channel, installed version, previous version, installed-at.
 
-- `/var/cache/deploy/` — cached R2 listings (projects, channels) written by
+- `/var/cache/ship/` — cached R2 listings (projects, channels) written by
   any root run, readable by all, used by completion; refreshed when older than
   a few minutes and credentials are readable.
 
 ### Completion
 
-`deploy completion bash|zsh|fish` (cobra). `install.sh` installs it for the
+`ship completion bash|zsh|fish` (cobra). `install.sh` installs it for the
 shells present. Dynamic suggestions: project refs from the R2 cache;
 `--service` from state (and, for `install`, the project name); `--version`
 from the ref's channels in the cache; for commands other than `install`, refs
@@ -387,25 +387,25 @@ already installed in the chosen service.
   personal account cannot provide an Action to repos in the `econumo` org.
 - Release workflow (manual dispatch): tags `vX.Y.Z`, moves `v1`, builds
   linux amd64/arm64/arm and darwin amd64/arm64, creates a GitHub release with
-  the raw binaries (`deploy-<os>-<arch>`, for `install.sh`, the setup Action
-  and `self-update`), tarballs `deploy-<version>-<os>-<arch>.tar.gz` (for
+  the raw binaries (`ship-<os>-<arch>`, for `install.sh`, the setup Action
+  and `self-update`), tarballs `ship-<version>-<os>-<arch>.tar.gz` (for
   Homebrew), `SHA256SUMS` and `install.sh`; publishes the linux binaries to
-  `s3://<bucket>/deploy/<version>/` + `latest` with `deploy publish`; then
+  `s3://<bucket>/ship/<version>/` + `latest` with `ship publish`; then
   updates the Homebrew formula.
-- **Homebrew**: `brew install dmtrkzntsv/tap/deploy`. The release workflow
-  writes `Formula/deploy.rb` in `dmtrkzntsv/homebrew-tap` and pushes it, the
+- **Homebrew**: `brew install dmtrkzntsv/tap/ship`. The release workflow
+  writes `Formula/ship.rb` in `dmtrkzntsv/homebrew-tap` and pushes it, the
   same way gosaid's release does (`scripts/update-brew-formula.sh`, token in
   a `TAP_GITHUB_TOKEN` secret). The formula points at the release tarballs
   per OS/arch (`on_macos`/`on_linux`, `on_arm`/`on_intel`), installs the
   binary, and installs completions with
-  `generate_completions_from_executable(bin/"deploy", "completion")`. It is
+  `generate_completions_from_executable(bin/"ship", "completion")`. It is
   meant for laptops; servers use `install.sh` (`/usr/local/bin`, root).
 - First install on a fresh host, no credentials needed:
   `curl -fsSL https://github.com/dmtrkzntsv/deploy/releases/latest/download/install.sh | sudo sh`
   — downloads the binary for the arch from the GitHub release, verifies the
   checksum, installs to `/usr/local/bin`, installs completion, creates
-  `/etc/deploy/config.toml` from the example if missing.
-- `deploy self-update [--version V]` reads `deploy/<channel>` from R2
+  `/etc/ship/config.toml` from the example if missing.
+- `ship self-update [--version V]` reads `ship/<channel>` from R2
   (default `latest`; a given `--version` is remembered in state), verifies,
   replaces itself atomically.
 
@@ -414,7 +414,7 @@ already installed in the chosen service.
 Services installed by `econumo-deploy.sh` (unit at
 `/etc/systemd/system/S.service`, binary `/opt/S/<project>`, env
 `/etc/S/env`, data `/var/lib/S`) are taken over with an explicit
-`deploy adopt <project> --service S --version V`:
+`ship adopt <project> --service S --version V`:
 
 - refuses unless that exact layout is present and `S` is not yet in state;
 - refuses clearly if the channel has no unit template (so a project is
@@ -434,8 +434,8 @@ Services installed by `econumo-deploy.sh` (unit at
 
 ## Decided by the owner
 
-- Builds stay in each project; each Makefile publishes with `deploy publish`; the Action only installs `deploy`.
-- `deploy` is published to the `dmtrkzntsv/homebrew-tap` tap.
+- Builds stay in each project; each Makefile publishes with `ship publish`; the Action only installs `ship`.
+- `ship` is published to the `dmtrkzntsv/homebrew-tap` tap.
 - Each project repo owns its systemd unit; the tool templates paths/users into
   it so several services of one project coexist.
 - Services can hold several projects sharing user, data and runtime dir
@@ -452,21 +452,21 @@ Services installed by `econumo-deploy.sh` (unit at
 
 ## Calls made in this document (owner to check)
 
-- Subcommands (`deploy install …`) instead of mode flags, for completion.
+- Subcommands (`ship install …`) instead of mode flags, for completion.
 - `--service` defaults to the project name; `--version` remembered per ref.
 - One env file per ref, `/etc/S/<name>.env`.
 - Runtime dir created by the tool, not `RuntimeDirectory=`.
-- State in `/var/lib/deploy/state.json` (not `/etc/deploy/`), so the
+- State in `/var/lib/ship/state.json` (not `/etc/ship/`), so the
   hand-edited config is never rewritten.
 - Cloudflare zone stored per service; one API token in config.
 - No `aws` profile support; keys from config/env only.
 - The Action installs a released binary rather than building from source.
 - macOS builds; host commands are Linux-only.
-- Laptop write credentials in `~/.config/deploy/config.toml`.
+- Laptop write credentials in `~/.config/ship/config.toml`.
 - `release.json` added to every published channel.
 - Only `latest` and `dev` are moving channels.
 - Health check stays "unit stays active for 10 s".
-- Adoption is a separate `deploy adopt` command that restarts with
+- Adoption is a separate `ship adopt` command that restarts with
   health check and rollback; no fallback unit.
 - Tool projects (binary, no unit) are publishable but not installable;
   `self-update` defaults to `latest`.
@@ -480,7 +480,7 @@ Services installed by `econumo-deploy.sh` (unit at
 
 ## Follow-up in other repos (not this work)
 
-- econumo, billing: make `cdn-upload` call `deploy publish`, drop their
+- econumo, billing: make `cdn-upload` call `ship publish`, drop their
   `SHA256SUMS` steps, add the setup Action to workflows;
   publish `deployment/systemd/<project>.service` as a template.
 - twillingate: add R2 publishing of plain binaries + template unit; keep the
@@ -488,7 +488,7 @@ Services installed by `econumo-deploy.sh` (unit at
 - twillingate-sql: release workflow + template unit using `{{RUN_DIR}}` for
   the socket and read-only `{{DATA_DIR}}`.
 - winterflow: template units for standalone, api, hub, agent;
-  `cdn-upload` via `deploy publish`; set R2 secrets for the new bucket.
+  `cdn-upload` via `ship publish`; set R2 secrets for the new bucket.
 - homebrew-tap: add a fine-grained token with write access to the tap as
   `TAP_GITHUB_TOKEN` in this repo.
 - Move all secrets to the new `lab` bucket credentials.
