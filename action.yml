@@ -1,0 +1,85 @@
+name: Setup ship
+description: Install the ship CLI (publishes project binaries to R2 and runs them as systemd services) onto the PATH.
+branding:
+  icon: upload-cloud
+  color: orange
+
+inputs:
+  version:
+    description: >-
+      Release to install: a full tag (v1.2.3), a major tag (v1, newest v1.x.y),
+      or latest. Default: the ref this action is used at (@v1, @v1.2.3), else latest.
+    required: false
+    default: ''
+
+outputs:
+  version:
+    description: The installed ship release tag.
+    value: ${{ steps.install.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install ship
+      id: install
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        INPUT_VERSION: ${{ inputs.version }}
+        ACTION_REF: ${{ github.action_ref }}
+        RUNNER_OS_NAME: ${{ runner.os }}
+        RUNNER_ARCH_NAME: ${{ runner.arch }}
+      run: |
+        set -euo pipefail
+        repo="dmtrkzntsv/ship"
+
+        case "$RUNNER_OS_NAME" in
+          Linux) os=linux ;;
+          macOS) os=darwin ;;
+          *) echo "::error::unsupported runner OS: $RUNNER_OS_NAME"; exit 1 ;;
+        esac
+        case "$RUNNER_ARCH_NAME" in
+          X64) arch=amd64 ;;
+          ARM64) arch=arm64 ;;
+          *) echo "::error::unsupported runner architecture: $RUNNER_ARCH_NAME"; exit 1 ;;
+        esac
+
+        want="$INPUT_VERSION"
+        if [[ -z "$want" ]]; then
+          if [[ "$ACTION_REF" =~ ^v[0-9] ]]; then want="$ACTION_REF"; else want=latest; fi
+        fi
+
+        if [[ "$want" == latest ]]; then
+          version=$(gh release view --repo "$repo" --json tagName --jq .tagName)
+        elif [[ "$want" =~ ^v[0-9]+$ ]]; then
+          # Major tag (moves with each release): resolve to the newest v<major>.* release.
+          version=$(gh api "repos/$repo/releases?per_page=100" \
+            --jq "[.[] | select(.draft | not) | select(.tag_name | startswith(\"${want}.\"))][0].tag_name // empty")
+          if [[ -z "$version" ]]; then
+            echo "::error::no release found for $want"; exit 1
+          fi
+        elif [[ "$want" =~ ^v[0-9][A-Za-z0-9._-]*$ ]]; then
+          version="$want"
+        else
+          echo "::error::invalid ship version: $want"; exit 1
+        fi
+
+        bin="ship-$os-$arch"
+        dest="$RUNNER_TOOL_CACHE/ship/$version"
+        tmp=$(mktemp -d)
+        trap 'rm -rf "$tmp"' EXIT
+
+        gh release download "$version" --repo "$repo" --dir "$tmp" --pattern "$bin" --pattern SHA256SUMS
+
+        grep "  $bin\$" "$tmp/SHA256SUMS" > "$tmp/check" || { echo "::error::$bin is not listed in SHA256SUMS"; exit 1; }
+        if command -v sha256sum >/dev/null 2>&1; then
+          (cd "$tmp" && sha256sum -c check >/dev/null) || { echo "::error::checksum mismatch for $bin"; exit 1; }
+        else
+          (cd "$tmp" && shasum -a 256 -c check >/dev/null) || { echo "::error::checksum mismatch for $bin"; exit 1; }
+        fi
+
+        mkdir -p "$dest"
+        install -m 0755 "$tmp/$bin" "$dest/ship"
+        echo "$dest" >> "$GITHUB_PATH"
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        echo "Installed ship $version ($os/$arch) in $dest"

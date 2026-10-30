@@ -1,0 +1,127 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag vX.Y.Z (blank = bump the patch of the latest tag)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: v
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$INPUT_VERSION" ]]; then
+            version="$INPUT_VERSION"
+          else
+            last=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+            if [[ -z "$last" ]]; then
+              version="v1.0.0"
+            else
+              IFS=. read -r major minor patch <<< "${last#v}"
+              version="v${major}.${minor}.$((patch + 1))"
+            fi
+          fi
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must look like vX.Y.Z, got: $version"
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/$version" >/dev/null; then
+            echo "::error::tag $version already exists"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make lint test
+      - name: Build
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: make dist VERSION="$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Restore binary permissions
+        run: chmod +x dist/ship-linux-* dist/ship-darwin-*
+      - name: Tag and create release
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "$VERSION"
+          git push origin "refs/tags/$VERSION"
+          gh release create "$VERSION" --title "$VERSION" --generate-notes \
+            dist/ship-linux-* dist/ship-darwin-* dist/ship-*.tar.gz dist/SHA256SUMS \
+            install.sh config.example.toml
+      - name: Move major tag
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          major="${VERSION%%.*}"
+          git tag -f "$major"
+          git push -f origin "refs/tags/$major"
+      - name: Publish ship to R2
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          SHIP_R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          SHIP_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          SHIP_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SHIP_R2_ENDPOINT" ]]; then
+            echo "::warning::R2_ENDPOINT secret is empty; skipping the R2 publish"
+            exit 0
+          fi
+          pub=$(mktemp -d)
+          cp dist/ship-linux-amd64 dist/ship-linux-arm64 dist/ship-linux-arm "$pub/"
+          ./dist/ship-linux-amd64 publish ship --path "$pub" --version "$VERSION" --channels latest
+      - name: Update Homebrew formula
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$TAP_GITHUB_TOKEN" ]]; then
+            echo "::warning::TAP_GITHUB_TOKEN secret is empty; skipping the Homebrew formula update"
+            exit 0
+          fi
+          scripts/update-brew-formula.sh "$VERSION" dist

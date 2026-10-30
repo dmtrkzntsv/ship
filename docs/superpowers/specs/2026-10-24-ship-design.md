@@ -192,9 +192,6 @@ so `@v1` keeps working.
 - Prunes the whole project, components included (they share a version
   folder).
 
-The repo's own release workflow tags `vX.Y.Z` and moves the major tag (`v1`)
-so `@v1` keeps working.
-
 ## The CLI
 
 One static Go binary (`CGO_ENABLED=0`), built for linux amd64/arm64/arm and
