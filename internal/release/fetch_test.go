@@ -137,6 +137,37 @@ func TestFetchMalformedReleaseJSON(t *testing.T) {
 	assert.Empty(t, dirFiles(t, dir))
 }
 
+func TestFetchMissingAsset(t *testing.T) {
+	st := publishFixture(t, "winterflow", "winterflow-hub-linux-amd64", "winterflow-hub-linux-arm64", "winterflow-hub.service")
+	dir := t.TempDir()
+	_, err := release.Fetch(context.Background(), st, layout.Ref{Project: "winterflow", Component: "agent"}, "latest", "amd64", dir)
+	require.Error(t, err)
+	assert.EqualError(t, err, `no asset "winterflow-agent" in winterflow/latest`)
+	assert.Empty(t, dirFiles(t, dir))
+}
+
+func TestFetchReleaseProjectMismatch(t *testing.T) {
+	st := publishFixture(t, "mytool", "mytool-linux-amd64", "mytool-linux-arm64")
+	// A release.json that names another project, listed correctly in SHA256SUMS.
+	key := "mytool/latest/"
+	other := []byte(`{"project":"other","version":"v1","published_at":"2026-10-29T12:00:00Z"}`)
+	o := st.Objects[key+"release.json"]
+	o.Data = other
+	st.Objects[key+"release.json"] = o
+	sm, err := sumsOf(st.Objects[key+"SHA256SUMS"].Data)
+	require.NoError(t, err)
+	sm["release.json"] = hexSum(other)
+	so := st.Objects[key+"SHA256SUMS"]
+	so.Data = sm.Marshal()
+	st.Objects[key+"SHA256SUMS"] = so
+
+	dir := t.TempDir()
+	_, err = release.Fetch(context.Background(), st, layout.Ref{Project: "mytool"}, "latest", "amd64", dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `names project "other"`)
+	assert.Empty(t, dirFiles(t, dir))
+}
+
 func TestHostArch(t *testing.T) {
 	assert.NotEmpty(t, release.HostArch())
 }

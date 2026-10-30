@@ -19,9 +19,9 @@ type PruneOptions struct {
 	// Protect names versions that are never deleted and do not count toward
 	// Keep, like versions a moving channel points to.
 	Protect []string
-	Yes       bool
-	Now       func() time.Time
-	Out       io.Writer
+	Yes     bool
+	Now     func() time.Time
+	Out     io.Writer
 }
 
 // PrunePlan is the outcome of a prune: Delete and Keep are immutable versions

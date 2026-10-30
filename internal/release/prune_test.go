@@ -205,9 +205,13 @@ func TestPublishAutoPrunes(t *testing.T) {
 
 func TestPruneRefusesUnreadableMovingChannel(t *testing.T) {
 	for name, corrupt := range map[string]func(m *storetest.Mem){
-		"missing":   func(m *storetest.Mem) { delete(m.Objects, "econumo/latest/release.json") },
-		"garbage":   func(m *storetest.Mem) { m.Objects["econumo/latest/release.json"] = storetest.MemObject{Data: []byte("{nope")} },
-		"zero date": func(m *storetest.Mem) { m.Objects["econumo/latest/release.json"] = storetest.MemObject{Data: []byte(`{"version":"v13"}`)} },
+		"missing": func(m *storetest.Mem) { delete(m.Objects, "econumo/latest/release.json") },
+		"garbage": func(m *storetest.Mem) {
+			m.Objects["econumo/latest/release.json"] = storetest.MemObject{Data: []byte("{nope")}
+		},
+		"zero date": func(m *storetest.Mem) {
+			m.Objects["econumo/latest/release.json"] = storetest.MemObject{Data: []byte(`{"version":"v13"}`)}
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := prunable(t)

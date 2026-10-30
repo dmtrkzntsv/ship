@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/dmtrkzntsv/ship/internal/layout"
 	"github.com/dmtrkzntsv/ship/internal/store"
@@ -52,6 +53,9 @@ func Fetch(ctx context.Context, st store.Store, ref layout.Ref, channel, arch, d
 	asset := ref.Asset()
 	binName := layout.BinaryFile(asset, arch)
 	if _, ok := sm[binName]; !ok {
+		if !hasPrefix(sm, asset+"-linux-") {
+			return Fetched{}, fmt.Errorf("no asset %q in %s/%s", asset, ref.Project, channel)
+		}
 		return Fetched{}, fmt.Errorf("no linux/%s build", arch)
 	}
 
@@ -74,6 +78,9 @@ func Fetch(ctx context.Context, st store.Store, ref layout.Ref, channel, arch, d
 	}
 	if err := json.Unmarshal(relRaw, &f.Release); err != nil {
 		return Fetched{}, fmt.Errorf("%s: %w", ReleaseFile, err)
+	}
+	if f.Release.Project != ref.Project {
+		return Fetched{}, fmt.Errorf("%s%s names project %q, want %q", prefix, ReleaseFile, f.Release.Project, ref.Project)
 	}
 
 	fetch := func(name string, mode os.FileMode) (string, error) {
@@ -121,6 +128,16 @@ func download(ctx context.Context, st store.Store, key, path string, mode os.Fil
 		return verr
 	}
 	return os.Chmod(path, mode) // OpenFile's mode is subject to umask
+}
+
+// hasPrefix reports whether any file listed in sm starts with prefix.
+func hasPrefix(sm sums.Sums, prefix string) bool {
+	for name := range sm {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func readAll(ctx context.Context, st store.Store, key string) ([]byte, error) {
