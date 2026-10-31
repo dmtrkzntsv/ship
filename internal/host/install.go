@@ -235,15 +235,6 @@ func unclaimedError(path, service string) error {
 // ForeignUnit reports whether the unit file exists on disk.
 func (h *Host) ForeignUnit(unit string) bool { return exists(h.Paths.UnitPath(unit)) }
 
-// LegacyLayout reports whether service has the layout of the old install
-// script: /etc/systemd/system/S.service, /opt/S/<project> and /etc/S/env.
-func (h *Host) LegacyLayout(service, project string) bool {
-	p := h.Paths
-	return exists(p.UnitPath(service)) &&
-		exists(p.Bin(service, project)) &&
-		exists(filepath.Join(p.EnvDir(service), "env"))
-}
-
 func exists(path string) bool {
 	_, err := os.Lstat(path)
 	return err == nil

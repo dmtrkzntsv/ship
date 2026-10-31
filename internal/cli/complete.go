@@ -134,7 +134,7 @@ func completeInstalledRefs(cmd *cobra.Command, args []string, toComplete string)
 }
 
 // serviceFlagCompletion suggests the services in state; when withProject is
-// set (install, adopt) it adds the project of the ref given so far.
+// set (install) it adds the project of the ref given so far.
 func serviceFlagCompletion(withProject bool) func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
 	return func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		var names []string

@@ -23,9 +23,8 @@ type State struct {
 
 type Service struct {
 	CFZone string `json:"cf_zone,omitempty"`
-	// CreatedUser records that ship created the service's user (install,
-	// or adopt of a user the old deploy script created), so uninstalling the
-	// last ref with --purge may delete it. A user that existed before is kept.
+	// CreatedUser records that ship created the service's user, so
+	// uninstalling the last ref with --purge may delete it. A user that existed before is kept.
 	CreatedUser bool                 `json:"created_user,omitempty"`
 	Refs        map[string]*RefState `json:"refs"` // key: Ref.String()
 }

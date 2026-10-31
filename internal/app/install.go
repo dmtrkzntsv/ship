@@ -54,9 +54,6 @@ func (a *App) Install(ctx context.Context, args InstallArgs) error {
 		return err
 	}
 	if existing == nil {
-		if a.Host.LegacyLayout(service, ref.Project) {
-			return fmt.Errorf("%s.service was installed by the old deploy script; take it over with: ship adopt %s --service %s --version <version>", service, ref, service)
-		}
 		if err := a.Host.CheckUnclaimed(service); err != nil {
 			return err
 		}
@@ -108,7 +105,7 @@ func (a *App) Install(ctx context.Context, args InstallArgs) error {
 	return nil
 }
 
-// checkNewServiceName validates a service name given to install or adopt.
+// checkNewServiceName validates a service name given to install.
 func checkNewServiceName(service string) error {
 	if !layout.ValidName(service) {
 		return fmt.Errorf("invalid service name %q", service)

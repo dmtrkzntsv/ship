@@ -53,26 +53,3 @@ func TestOpsCommandsRequireRoot(t *testing.T) {
 		assert.Contains(t, err.Error(), "ship "+cmd+": must run as root")
 	}
 }
-
-func TestAdoptFlags(t *testing.T) {
-	root := NewRoot(io.Discard, io.Discard)
-	root.SetArgs([]string{"adopt", "econumo", "--service", "econumo-beta"})
-	err := root.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), `"version" not set`)
-
-	if os.Geteuid() == 0 {
-		return
-	}
-	root = NewRoot(io.Discard, io.Discard)
-	root.SetArgs([]string{"adopt", "econumo", "--service", "econumo-beta", "--version", "dev"})
-	err = root.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ship adopt: must run as root")
-
-	root = NewRoot(io.Discard, io.Discard)
-	root.SetArgs([]string{"adopt", "econumo", "--version", "dev", "--purge-cache"})
-	err = root.Execute()
-	require.Error(t, err, "adopt has no --purge-cache")
-	assert.Contains(t, err.Error(), "unknown flag")
-}

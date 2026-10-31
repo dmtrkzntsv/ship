@@ -147,7 +147,6 @@ file exists yet, and that file is then the live configuration. So:
 
 ```
 ship install   <ref> [--service S] --version V [--cf-zone Z]
-ship adopt     <ref> [--service S] --version V [--cf-zone Z]
 ship update    <ref> [--service S] [--version V] [--purge-cache]
 ship rollback  <ref> [--service S]
 ship uninstall <ref> [--service S] [--purge] [--purge-cache]
@@ -179,20 +178,36 @@ names such as `root`, `ssh` or `etc` cannot be services. `uninstall --purge`
 deletes the service user only if ship created it. An interrupted `update` or
 `rollback` (Ctrl-C, SIGTERM, SIGHUP) restores the previous version before exiting.
 
-## Migrating a host from the old deploy script
+## Moving a hand-installed service to ship
 
-Hosts installed by the former `econumo-deploy.sh` are taken over in place:
+ship never takes over files it did not create, so a service installed by hand or
+by an older script moves over once, with a minute of downtime. With `S` the
+service name ship will use and `<project>` the ref:
 
 ```sh
-sudo ship adopt econumo --service econumo --version latest
+# 1. stop the old service and move its files aside (kept for going back)
+sudo systemctl disable --now <old-unit>
+sudo mv /etc/systemd/system/<old-unit>.service /root/<old-unit>.service.pre-ship
+sudo systemctl daemon-reload
+sudo mv /etc/S /etc/S.pre-ship 2>/dev/null; sudo mv /opt/S /opt/S.pre-ship 2>/dev/null
+
+# 2. install with ship; it seeds /etc/S/<project>.env from the env example
+sudo ship install <project> --service S --version latest
+
+# 3. put the old configuration and any key files back
+sudo sh -c 'cat /etc/S.pre-ship/<old env file> > /etc/S/<project>.env'
+sudo cp -p /etc/S.pre-ship/<key files> /etc/S/ && sudo chgrp S /etc/S/<key files>
+
+# 4. start and check, then remove the old binary, files and (if renamed) user
+sudo ship start <project> --service S
+sudo ship logs <project> --service S -n 50 --no-follow
 ```
 
-`adopt` keeps the user, data directory and unit name, moves the env file to
-`/etc/S/<project>.env`, installs the channel's binary and templated unit, restarts
-with a health check and rolls everything back on failure. It refuses until the
-project publishes a unit template. The script's binary and unit are kept as the
-previous pair, but `ship rollback` is unavailable right after `ship adopt` (ship
-does not know their version) until the next `ship update`.
+The data dir `/var/lib/S` is reused as it is when it is owned by user `S`; when
+the old service ran under another user or kept its data elsewhere, move the data
+there and `chown -R S:S /var/lib/S` after step 2. Going back: `ship uninstall
+<project> --service S` (without `--purge`, which would delete the data dir),
+`rm -r /etc/S`, move the `.pre-ship` files back, and re-enable the old unit.
 
 ## Development
 

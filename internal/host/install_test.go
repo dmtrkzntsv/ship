@@ -211,11 +211,10 @@ func TestInstallBadTemplateTouchesNothing(t *testing.T) {
 	assert.Empty(t, ents)
 }
 
-func TestForeignUnitAndLegacyLayout(t *testing.T) {
+func TestForeignUnit(t *testing.T) {
 	h, _ := newHost(t)
 	p := h.Paths
 	assert.False(t, h.ForeignUnit("econumo"))
-	assert.False(t, h.LegacyLayout("econumo", "econumo"))
 
 	write := func(path string) {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
@@ -223,12 +222,6 @@ func TestForeignUnitAndLegacyLayout(t *testing.T) {
 	}
 	write(p.UnitPath("econumo"))
 	assert.True(t, h.ForeignUnit("econumo"))
-	assert.False(t, h.LegacyLayout("econumo", "econumo"))
-	write(p.Bin("econumo", "econumo"))
-	assert.False(t, h.LegacyLayout("econumo", "econumo"))
-	write(filepath.Join(p.EnvDir("econumo"), "env"))
-	assert.True(t, h.LegacyLayout("econumo", "econumo"))
-	assert.False(t, h.LegacyLayout("econumo", "other"))
 }
 
 func TestInstallLateFailureRemovesUnit(t *testing.T) {

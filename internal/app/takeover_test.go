@@ -93,24 +93,10 @@ func TestUninstallThenReinstallKeepsConfig(t *testing.T) {
 	assert.NoDirExists(t, e.app.Host.Paths.EnvDir("econumo"))
 }
 
-func TestInstallLegacyLayoutPointsToAdoptFirst(t *testing.T) {
-	e := newEnv(t)
-	legacyFixture(t, e, "econumo", "econumo")
-	err := e.app.Install(context.Background(), app.InstallArgs{Ref: "econumo", Version: "dev"})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ship adopt econumo --service econumo")
-}
-
-func TestInstallAndAdoptRefuseReservedServiceNames(t *testing.T) {
+func TestInstallRefusesReservedServiceNames(t *testing.T) {
 	for _, name := range []string{"root", "ship", "systemd", "ssh", "sshd", "nobody", "etc", "opt", "var", "usr", "tmp", "run", "lib"} {
 		e := newEnv(t)
 		err := e.app.Install(context.Background(), app.InstallArgs{Ref: "econumo", Service: name, Version: "dev"})
-		require.Error(t, err, name)
-		assert.Contains(t, err.Error(), "reserved", name)
-
-		args := adoptArgs()
-		args.Service = name
-		err = e.app.Adopt(context.Background(), args)
 		require.Error(t, err, name)
 		assert.Contains(t, err.Error(), "reserved", name)
 		assert.Empty(t, e.sys.Calls)
@@ -143,13 +129,6 @@ func TestInstallRecordsCreatedUser(t *testing.T) {
 		require.NoError(t, e.app.Install(ctx, app.InstallArgs{Ref: "twillingate-sql", Service: "twillingate", Version: "v5"}))
 		assert.True(t, e.state(t).Services["twillingate"].CreatedUser)
 	})
-}
-
-func TestAdoptRecordsCreatedUser(t *testing.T) {
-	e := newEnv(t)
-	legacyFixture(t, e, "econumo-beta", "econumo")
-	require.NoError(t, e.app.Adopt(context.Background(), adoptArgs()))
-	assert.True(t, e.state(t).Services["econumo-beta"].CreatedUser)
 }
 
 func TestInstallRefusesNameCollisions(t *testing.T) {
