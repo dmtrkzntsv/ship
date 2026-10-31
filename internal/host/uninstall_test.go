@@ -90,6 +90,18 @@ func TestUninstallLastKeepsDataAndUser(t *testing.T) {
 	assert.Contains(t, out.String(), "Kept /etc/tw and /var/lib/tw (user tw kept); remove with --purge")
 }
 
+func TestUninstallLastNormalizesKeptEnvDir(t *testing.T) {
+	// Installed by ship v0.1.0, which left /etc/S root:root: the kept dir
+	// gets group S so a later install recognises it.
+	h, fs, _ := installTwo(t)
+	ctx := context.Background()
+	fs.Owners[h.Paths.EnvDir("tw")] = "root:root"
+	require.NoError(t, h.Uninstall(ctx, "tw", sqlRef, "twillingate-sql", false, false, true))
+	require.NoError(t, h.Uninstall(ctx, "tw", twRef, "twillingate", true, false, true))
+	assert.Equal(t, "root:tw", fs.Owners[h.Paths.EnvDir("tw")])
+	assert.NoError(t, h.CheckUnclaimed("tw"))
+}
+
 func TestUninstallLastPurge(t *testing.T) {
 	h, fs, out := uninstallBoth(t, true)
 	assert.NoDirExists(t, h.Paths.DataDir("tw"))

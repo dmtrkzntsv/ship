@@ -56,6 +56,12 @@ func (h *Host) Uninstall(ctx context.Context, service string, ref layout.Ref, un
 				return err
 			}
 		}
+	} else if exists(p.EnvDir(service)) {
+		// ship v0.1.0 left /etc/S root:root; give the kept dir the group
+		// CheckUnclaimed looks for, while the service is still known as ours.
+		if err := h.Sys.Chown(p.EnvDir(service), "root:"+service); err != nil {
+			return err
+		}
 	}
 	var kept []string
 	for _, d := range []struct{ path, shown string }{
