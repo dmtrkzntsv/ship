@@ -1,0 +1,20 @@
+[Unit]
+Description=ship e2e fixture sidecar ({{UNIT}})
+
+[Service]
+Type=simple
+User={{USER}}
+Group={{USER}}
+EnvironmentFile={{ENV_FILE}}
+Environment=RUN={{RUN_DIR}} NAME={{UNIT}}
+WorkingDirectory={{DATA_DIR}}
+ExecStart={{BIN}} serve
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadOnlyPaths={{DATA_DIR}}
+ReadWritePaths={{RUN_DIR}}
+
+[Install]
+WantedBy=multi-user.target
