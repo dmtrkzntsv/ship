@@ -53,17 +53,28 @@ func (p Placeholders) values() map[string]string {
 	}
 }
 
-// RenderUnit substitutes placeholders; any unknown {{...}} is an error.
+// RenderUnit substitutes placeholders; any unknown {{...}} is an error,
+// except on a comment line (# or ;), where it is left as written.
 func RenderUnit(tmpl string, p Placeholders) (string, error) {
 	vals := p.values()
 	var bad []string
-	out := placeholderRe.ReplaceAllStringFunc(tmpl, func(m string) string {
-		v, ok := vals[m]
-		if !ok {
+	lines := strings.SplitAfter(tmpl, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimLeft(line, " \t")
+		comment := strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, ";")
+		lines[i] = placeholderRe.ReplaceAllStringFunc(line, func(m string) string {
+			v, ok := vals[m]
+			switch {
+			case ok:
+				return v
+			case comment:
+				return m
+			}
 			bad = append(bad, m)
-		}
-		return v
-	})
+			return ""
+		})
+	}
+	out := strings.Join(lines, "")
 	if len(bad) > 0 {
 		return "", fmt.Errorf("unit template has unknown placeholder %s", strings.Join(bad, ", "))
 	}
