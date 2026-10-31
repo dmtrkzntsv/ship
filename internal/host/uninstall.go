@@ -5,16 +5,19 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/dmtrkzntsv/ship/internal/layout"
 )
 
 // Uninstall stops, disables and removes the ref's unit, binary (with its
-// .prev), unit backup and env file. When last is set it also removes /opt/S,
-// /etc/S, the runtime dir /run/S and its tmpfiles entry, and with purge the
-// data dir; the user goes only when deleteUser is set (ship created it) and
-// the data dir is gone. It tolerates a
-// half-installed ref: stop and disable errors and missing files are ignored.
+// .prev) and unit backup; its env file only with purge. When last is set it
+// also removes /opt/S, the runtime dir /run/S and its tmpfiles entry, and
+// with purge /etc/S and the data dir: both hold what an operator wrote by
+// hand (config, secrets, data), so a plain uninstall keeps them for a later
+// install. The user goes only when deleteUser is set (ship created it) and
+// the data dir is gone. It tolerates a half-installed ref: stop and disable
+// errors and missing files are ignored.
 func (h *Host) Uninstall(ctx context.Context, service string, ref layout.Ref, unit string, last, purge, deleteUser bool) error {
 	p := h.Paths
 	in := h.installed(service, ref, unit)
@@ -22,7 +25,11 @@ func (h *Host) Uninstall(ctx context.Context, service string, ref layout.Ref, un
 	_ = h.Sys.Systemctl(ctx, "stop", unit)
 	_ = h.Sys.Systemctl(ctx, "disable", unit)
 
-	for _, f := range []string{in.unitFile, in.unitBackup, in.bin, in.binPrev, p.EnvFile(service, ref.Name())} {
+	files := []string{in.unitFile, in.unitBackup, in.bin, in.binPrev}
+	if purge {
+		files = append(files, p.EnvFile(service, ref.Name()))
+	}
+	for _, f := range files {
 		if err := removeIfExists(f); err != nil {
 			return err
 		}
@@ -35,7 +42,7 @@ func (h *Host) Uninstall(ctx context.Context, service string, ref layout.Ref, un
 	if !last {
 		return nil
 	}
-	for _, d := range []string{p.BinDir(service), p.EnvDir(service), p.RunDir(service)} {
+	for _, d := range []string{p.BinDir(service), p.RunDir(service)} {
 		if err := os.RemoveAll(d); err != nil {
 			return err
 		}
@@ -44,16 +51,27 @@ func (h *Host) Uninstall(ctx context.Context, service string, ref layout.Ref, un
 		return err
 	}
 	if purge {
-		if err := os.RemoveAll(p.DataDir(service)); err != nil {
-			return err
+		for _, d := range []string{p.EnvDir(service), p.DataDir(service)} {
+			if err := os.RemoveAll(d); err != nil {
+				return err
+			}
 		}
 	}
-	if exists(p.DataDir(service)) {
-		if deleteUser {
-			fmt.Fprintf(h.Out, "Data kept at %s (user %s kept); remove it with --purge\n", Paths{}.DataDir(service), service)
-		} else {
-			fmt.Fprintf(h.Out, "Data kept at %s; remove it with --purge\n", Paths{}.DataDir(service))
+	var kept []string
+	for _, d := range []struct{ path, shown string }{
+		{p.EnvDir(service), Paths{}.EnvDir(service)},
+		{p.DataDir(service), Paths{}.DataDir(service)},
+	} {
+		if exists(d.path) {
+			kept = append(kept, d.shown)
 		}
+	}
+	if len(kept) > 0 {
+		user := ""
+		if deleteUser {
+			user = fmt.Sprintf(" (user %s kept)", service)
+		}
+		fmt.Fprintf(h.Out, "Kept %s%s; remove with --purge\n", strings.Join(kept, " and "), user)
 		return nil
 	}
 	if deleteUser && h.Sys.UserExists(service) {

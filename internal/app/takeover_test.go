@@ -53,6 +53,46 @@ func TestInstallKeepsDataDirOwnedByServiceUser(t *testing.T) {
 	assert.False(t, e.state(t).Services["econumo"].CreatedUser)
 }
 
+func TestInstallKeepsEnvDirOfServiceGroup(t *testing.T) {
+	// Left behind by `ship uninstall` without --purge: /etc/S (root:S) with
+	// the env file and any hand-placed secrets is picked up again.
+	e := newEnv(t)
+	etc := e.app.Host.Paths.EnvDir("econumo")
+	env := e.app.Host.Paths.EnvFile("econumo", "econumo")
+	require.NoError(t, os.MkdirAll(etc, 0o750))
+	require.NoError(t, os.WriteFile(env, []byte("SECRET=1\n"), 0o640))
+	e.sys.Users = map[string]bool{"econumo": true}
+	e.sys.Owners = map[string]string{etc: "root:econumo", env: "root:econumo"}
+
+	require.NoError(t, e.app.Install(context.Background(), app.InstallArgs{Ref: "econumo", Version: "dev"}))
+	assert.Equal(t, "SECRET=1\n", readFile(t, env))
+}
+
+func TestInstallRefusesEnvDirOfOtherGroup(t *testing.T) {
+	e := newEnv(t)
+	etc := e.app.Host.Paths.EnvDir("econumo")
+	require.NoError(t, os.MkdirAll(etc, 0o750))
+	e.sys.Users = map[string]bool{"econumo": true}
+	e.sys.Owners = map[string]string{etc: "root:root"}
+	err := e.app.Install(context.Background(), app.InstallArgs{Ref: "econumo", Version: "dev"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "/etc/econumo already exists")
+}
+
+func TestUninstallThenReinstallKeepsConfig(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	require.NoError(t, e.app.Install(ctx, app.InstallArgs{Ref: "econumo", Version: "dev"}))
+	env := e.app.Host.Paths.EnvFile("econumo", "econumo")
+	require.NoError(t, os.WriteFile(env, []byte("SECRET=1\n"), 0o640))
+	require.NoError(t, e.app.Uninstall(ctx, app.UninstallArgs{Ref: "econumo"}))
+	require.NoError(t, e.app.Install(ctx, app.InstallArgs{Ref: "econumo", Version: "dev"}))
+	assert.Equal(t, "SECRET=1\n", readFile(t, env))
+
+	require.NoError(t, e.app.Uninstall(ctx, app.UninstallArgs{Ref: "econumo", Purge: true}))
+	assert.NoDirExists(t, e.app.Host.Paths.EnvDir("econumo"))
+}
+
 func TestInstallLegacyLayoutPointsToAdoptFirst(t *testing.T) {
 	e := newEnv(t)
 	legacyFixture(t, e, "econumo", "econumo")

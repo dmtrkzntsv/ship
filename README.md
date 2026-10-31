@@ -75,6 +75,10 @@ just published are always kept). Versions are immutable: an existing version is
 refused, except a folder left without `SHA256SUMS` by a failed publish (replaced)
 and the identical build (skipped, so a retry still updates the channels).
 
+`--version` is optional: `ship publish econumo --path DIR --channels dev` updates
+only the `dev` channel and creates no version folder, which suits builds of every
+commit. At least one of `--version` and `--channels` is required.
+
 From a Makefile, so local and CI publishes are identical:
 
 ```make
@@ -94,13 +98,21 @@ From a GitHub workflow:
     SHIP_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
 ```
 
+The bucket defaults to `lab`; set `SHIP_R2_BUCKET` for another one.
+
 The action's optional `version` input picks another release (`v0.1.0`, `v0`,
-`latest`); it outputs the installed `version`.
+`latest`); it outputs the installed `version`. Without it, the action installs
+the release it is used at: `@v0` the newest v0.x.y, `@v0.1.0` that one. Pinned
+to a commit SHA (`dmtrkzntsv/ship@<sha> # v0.1.0`), it installs the release
+tagged at that commit and fails if there is none, so the binary stays pinned
+with the action.
 
 ## Unit templates
 
-Units are shipped by each project and templated at install time. Any other
-`{{…}}` is an error, and the result is checked with `systemd-analyze verify`.
+Units are shipped by each project and templated at install time. Placeholders
+are filled in anywhere in the file, comments included. Any other `{{…}}` is an
+error, except on a comment line (`#` or `;`), where it is left as written. The
+result is checked with `systemd-analyze verify`.
 
 | placeholder | value |
 |---|---|
@@ -112,6 +124,24 @@ Units are shipped by each project and templated at install time. Any other
 | `{{DATA_DIR}}` | `/var/lib/S` |
 | `{{RUN_DIR}}` | `/run/S` |
 | `{{UNIT}}` | unit name of this project ref |
+
+ship creates the user, `/opt/S`, `/etc/S` (`root:S`, 0750), `/var/lib/S`
+(owned by `S`) and `/run/S` (through tmpfiles.d), so a unit must not use
+`DynamicUser=`, `StateDirectory=` or `RuntimeDirectory=` for them. Files the
+service reads itself, such as keys or certificates, can go in `/etc/S`.
+
+### Env example
+
+`<asset>.env.example` is copied **verbatim** to `/etc/S/<name>.env` when no env
+file exists yet, and that file is then the live configuration. So:
+
+- it must not hold development defaults or secrets: leave required values empty,
+  so a fresh install refuses to start until it is configured;
+- placeholders are not filled in, so it cannot say `{{DATA_DIR}}`. `ship run`
+  loads only the env file (not the unit's `Environment=` lines) and runs in the
+  data dir; for paths that both the service and `ship run` need, set
+  `WorkingDirectory={{DATA_DIR}}` in the unit and use paths relative to it
+  (`DATABASE_URL=sqlite://app.db`).
 
 ## Commands
 
@@ -136,9 +166,15 @@ A `<ref>` is `<project>` or `<project>/<component>`. Host-changing commands need
 root. Run `ship <command> --help` for details; tab completion suggests refs,
 services and versions.
 
+`uninstall` keeps what an operator wrote: the ref's env file, and for the
+service's last ref `/etc/S`, `/var/lib/S` and the user. `--purge` deletes the
+env file, and with the last ref `/etc/S`, `/var/lib/S` and the user (if ship
+created it).
+
 `install` never takes over what it did not create: for a service ship does not
-manage yet it refuses if `/opt/S` or `/etc/S` exists, or `/var/lib/S` exists and
-is not owned by user `S` (data kept by an earlier `uninstall` is fine). System
+manage yet it refuses if `/opt/S` exists, `/etc/S` exists and its group is not
+`S`, or `/var/lib/S` exists and is not owned by user `S`. What an earlier
+`uninstall` kept is picked up again. System
 names such as `root`, `ssh` or `etc` cannot be services. `uninstall --purge`
 deletes the service user only if ship created it. An interrupted `update` or
 `rollback` (Ctrl-C, SIGTERM, SIGHUP) restores the previous version before exiting.

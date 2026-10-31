@@ -18,8 +18,8 @@ type UninstallArgs struct {
 }
 
 // Uninstall removes an installed ref from the host and from state. When it
-// is the service's last ref the service goes too; Purge then also deletes
-// the data dir.
+// is the service's last ref the service goes too; Purge also deletes the env
+// file and, with the last ref, /etc/S and the data dir.
 func (a *App) Uninstall(ctx context.Context, args UninstallArgs) error {
 	ref, service, err := refService(args.Ref, args.Service)
 	if err != nil {

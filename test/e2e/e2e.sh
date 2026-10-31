@@ -207,6 +207,7 @@ assert_eq "$(systemctl is-enabled e2e)" enabled "is-enabled e2e"
 assert_file /etc/e2e/fixture.env
 grep -qx 'PORT=' /etc/e2e/fixture.env || fail "env file was not seeded from fixture.env.example"
 assert_mode /etc/e2e/fixture.env "640 root:e2e"
+assert_mode /etc/e2e "750 root:e2e"
 assert_mode /var/lib/e2e "750 e2e:e2e"
 assert_mode /run/e2e "750 e2e:e2e"
 assert_mode /opt/e2e/fixture "755 root:root"
@@ -336,6 +337,7 @@ assert_running old 18081 v15
 assert_gone /etc/old/env
 assert_eq "$(cat /etc/old/fixture.env)" "PORT=18081" "/etc/old/fixture.env"
 assert_mode /etc/old/fixture.env "640 root:old"
+assert_mode /etc/old "750 root:old"
 assert_eq "$(st '.services.old.refs.fixture | "\(.unit) \(.channel)"')" "old latest" "state of old"
 assert_eq "$(st '.services.old.created_user')" true "created_user of old"
 expect_fail rollback fixture --service old
@@ -345,22 +347,33 @@ assert_file /opt/old/old.service.prev
 assert_mode /run/old "750 old:old"
 assert_file /run/old/old.ready
 
-log "9. uninstall: the sidecar, then fixture (data and user kept), then old with --purge"
+log "9. uninstall: the sidecar, then fixture (config, data and user kept), reinstall, then --purge"
 ship uninstall fixture/sidecar --service e2e
 assert_gone /etc/systemd/system/e2e-sidecar.service
 assert_gone /opt/e2e/fixture-sidecar
-assert_gone /etc/e2e/sidecar.env
+assert_file /etc/e2e/sidecar.env
 assert_not_active e2e-sidecar
 assert_active e2e
 assert_eq "$(st '.services.e2e.refs["fixture/sidecar"]')" null "state of fixture/sidecar"
 ship uninstall fixture --service e2e
 assert_not_active e2e
-for p in /etc/systemd/system/e2e.service /opt/e2e /etc/e2e /run/e2e /etc/tmpfiles.d/ship-e2e.conf; do
+for p in /etc/systemd/system/e2e.service /opt/e2e /run/e2e /etc/tmpfiles.d/ship-e2e.conf; do
 	assert_gone "$p"
 done
 assert_file /var/lib/e2e/served
+assert_mode /etc/e2e "750 root:e2e"
+grep -qx 'PORT=18080' /etc/e2e/fixture.env || fail "uninstall without --purge lost the env file"
 assert_user e2e
 assert_eq "$(st '.services.e2e')" null "state of e2e"
+# a plain uninstall keeps /etc/e2e, and a new install picks it up again
+ship install fixture --service e2e --version latest
+grep -qx 'PORT=18080' /etc/e2e/fixture.env || fail "reinstall replaced the kept env file"
+ship uninstall fixture --service e2e --purge
+for p in /etc/systemd/system/e2e.service /opt/e2e /etc/e2e /run/e2e /var/lib/e2e /etc/tmpfiles.d/ship-e2e.conf; do
+	assert_gone "$p"
+done
+# the reinstall found user e2e already there, so ship no longer counts it as its own
+assert_user e2e
 ship uninstall fixture --service old --purge
 assert_not_active old
 for p in /etc/systemd/system/old.service /opt/old /etc/old /run/old /var/lib/old /etc/tmpfiles.d/ship-old.conf; do

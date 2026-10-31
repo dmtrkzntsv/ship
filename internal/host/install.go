@@ -88,6 +88,11 @@ func (h *Host) Install(ctx context.Context, t Target) (err error) {
 	if err := created(p.EnvDir(s), func() error { return makeDir(p.EnvDir(s), 0o750) }); err != nil {
 		return err
 	}
+	// root:S so the service can read files placed next to its env file
+	// (keys, certificates); systemd reads EnvironmentFile= as root anyway.
+	if err := h.Sys.Chown(p.EnvDir(s), "root:"+s); err != nil {
+		return err
+	}
 
 	conf := p.Tmpfiles(s)
 	if err := os.MkdirAll(filepath.Dir(conf), 0o755); err != nil {
@@ -193,26 +198,31 @@ func tmpfilesEntry(s string) []byte {
 }
 
 // CheckUnclaimed refuses a service ship does not manage yet whose
-// directories already exist: /opt/S, /etc/S, or /var/lib/S unless it is
-// owned by user S (data kept by an uninstall without --purge). Installing
-// would take them over, and uninstalling would delete them.
+// directories already exist: /opt/S, /etc/S unless its group is S, or
+// /var/lib/S unless it is owned by user S (both kept by an uninstall without
+// --purge, which also keeps the user). Installing would take them over, and
+// uninstalling would delete them.
 func (h *Host) CheckUnclaimed(service string) error {
 	p, hp := h.Paths, Paths{}
-	for _, d := range []struct{ path, shown string }{
-		{p.BinDir(service), hp.BinDir(service)},
-		{p.EnvDir(service), hp.EnvDir(service)},
-	} {
-		if exists(d.path) {
-			return unclaimedError(d.shown, service)
-		}
+	if exists(p.BinDir(service)) {
+		return unclaimedError(hp.BinDir(service), service)
 	}
-	if data := p.DataDir(service); exists(data) {
-		owner, _, err := h.Sys.Owner(data)
+	for _, d := range []struct {
+		path, shown string
+		ours        func(user, group string) bool
+	}{
+		{p.EnvDir(service), hp.EnvDir(service), func(_, group string) bool { return group == service }},
+		{p.DataDir(service), hp.DataDir(service), func(user, _ string) bool { return user == service }},
+	} {
+		if !exists(d.path) {
+			continue
+		}
+		user, group, err := h.Sys.Owner(d.path)
 		if err != nil {
 			return err
 		}
-		if owner != service || !h.Sys.UserExists(service) {
-			return unclaimedError(hp.DataDir(service), service)
+		if !d.ours(user, group) || !h.Sys.UserExists(service) {
+			return unclaimedError(d.shown, service)
 		}
 	}
 	return nil

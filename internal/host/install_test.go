@@ -129,6 +129,8 @@ func TestInstallLaysOutFiles(t *testing.T) {
 		assert.Contains(t, calls, "CreateTmpfiles "+p.Tmpfiles("tw"))
 		assert.Contains(t, calls, "Chown "+p.DataDir("tw")+" tw:tw")
 		assert.Contains(t, calls, "Chown "+env+" root:tw")
+		// the service reads its own files in /etc/S (keys, certificates)
+		assert.Contains(t, calls, "Chown "+p.EnvDir("tw")+" root:tw")
 		assert.True(t, hasCallPrefix(calls, "VerifyUnit "), calls)
 		assert.Contains(t, calls, "DaemonReload")
 		assert.Contains(t, calls, "systemctl enable twillingate-sql")

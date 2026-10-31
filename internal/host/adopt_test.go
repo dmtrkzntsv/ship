@@ -62,6 +62,8 @@ func TestHostAdoptSwaps(t *testing.T) {
 	assert.Equal(t, "A=1", read(t, p.EnvFile("tw", "twillingate-sql")))
 	assert.NoFileExists(t, filepath.Join(p.EnvDir("tw"), "env"))
 	assert.Equal(t, 1, countCalls(fs.Calls, "systemctl restart tw"))
+	// /etc/S gets the group a ship install gives it
+	assert.Contains(t, fs.Calls, "Chown "+p.EnvDir("tw")+" root:tw")
 }
 
 func TestHostAdoptKeepsExistingTmpfiles(t *testing.T) {

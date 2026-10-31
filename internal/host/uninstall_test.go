@@ -41,10 +41,12 @@ func TestUninstallOneOfTwo(t *testing.T) {
 	require.NoError(t, h.Uninstall(context.Background(), "tw", sqlRef, "twillingate-sql", false, false, true))
 
 	for _, gone := range []string{p.UnitPath("twillingate-sql"), p.Bin("tw", "twillingate-sql"), p.Bin("tw", "twillingate-sql") + ".prev",
-		p.UnitBackup("tw", "twillingate-sql"), p.EnvFile("tw", "twillingate-sql")} {
+		p.UnitBackup("tw", "twillingate-sql")} {
 		assert.NoFileExists(t, gone)
 	}
-	for _, kept := range []string{p.BinDir("tw"), p.EnvDir("tw"), p.DataDir("tw"), p.Tmpfiles("tw"), p.UnitPath("twillingate"), p.EnvFile("tw", "twillingate")} {
+	// the env file holds hand-written config and secrets: kept without --purge
+	for _, kept := range []string{p.BinDir("tw"), p.EnvDir("tw"), p.DataDir("tw"), p.Tmpfiles("tw"), p.UnitPath("twillingate"),
+		p.EnvFile("tw", "twillingate"), p.EnvFile("tw", "twillingate-sql")} {
 		assert.True(t, pathExists(kept), kept)
 	}
 	assert.True(t, fs.UserExists("tw"))
@@ -52,6 +54,15 @@ func TestUninstallOneOfTwo(t *testing.T) {
 		"systemctl stop twillingate-sql", "systemctl disable twillingate-sql",
 		"DaemonReload", "systemctl reset-failed twillingate-sql",
 	}, fs.Calls)
+}
+
+func TestUninstallOneOfTwoPurgeRemovesEnvFile(t *testing.T) {
+	h, _, _ := installTwo(t)
+	p := h.Paths
+	require.NoError(t, h.Uninstall(context.Background(), "tw", sqlRef, "twillingate-sql", false, true, true))
+	assert.NoFileExists(t, p.EnvFile("tw", "twillingate-sql"))
+	assert.FileExists(t, p.EnvFile("tw", "twillingate"))
+	assert.DirExists(t, p.DataDir("tw"))
 }
 
 func uninstallBoth(t *testing.T, purge bool) (*host.Host, *host.FakeSys, *bytes.Buffer) {
@@ -66,27 +77,31 @@ func uninstallBoth(t *testing.T, purge bool) (*host.Host, *host.FakeSys, *bytes.
 func TestUninstallLastKeepsDataAndUser(t *testing.T) {
 	h, fs, out := uninstallBoth(t, false)
 	p := h.Paths
-	for _, gone := range []string{p.BinDir("tw"), p.EnvDir("tw"), p.RunDir("tw"), p.Tmpfiles("tw")} {
+	require.NoError(t, os.WriteFile(p.EnvDir("tw")+"/issuer.pem", []byte("key"), 0o400))
+	for _, gone := range []string{p.BinDir("tw"), p.RunDir("tw"), p.Tmpfiles("tw")} {
 		assert.False(t, pathExists(gone), gone)
 	}
 	assert.DirExists(t, p.DataDir("tw"))
+	assert.DirExists(t, p.EnvDir("tw"))
+	assert.FileExists(t, p.EnvFile("tw", "twillingate"))
+	assert.FileExists(t, p.EnvFile("tw", "twillingate-sql"))
 	assert.True(t, fs.UserExists("tw"))
 	assert.NotContains(t, fs.Calls, "DeleteUser tw")
-	assert.Contains(t, out.String(), "Data kept at /var/lib/tw")
+	assert.Contains(t, out.String(), "Kept /etc/tw and /var/lib/tw (user tw kept); remove with --purge")
 }
 
 func TestUninstallLastPurge(t *testing.T) {
 	h, fs, out := uninstallBoth(t, true)
 	assert.NoDirExists(t, h.Paths.DataDir("tw"))
+	assert.NoDirExists(t, h.Paths.EnvDir("tw"))
 	assert.False(t, fs.UserExists("tw"))
 	assert.Contains(t, fs.Calls, "DeleteUser tw")
-	assert.NotContains(t, out.String(), "Data kept")
+	assert.NotContains(t, out.String(), "Kept")
 }
 
 func TestReinstallKeepsEnvFile(t *testing.T) {
 	h, fs, _ := uninstallBoth(t, false)
 	p := h.Paths
-	require.NoError(t, os.MkdirAll(p.EnvDir("tw"), 0o750))
 	require.NoError(t, os.WriteFile(p.EnvFile("tw", "twillingate-sql"), []byte("KEEP=1\n"), 0o640))
 	fs.Calls = nil
 

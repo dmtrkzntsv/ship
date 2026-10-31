@@ -14,7 +14,8 @@ import (
 // env path checked free, before anything changes. It then makes sure the
 // tmpfiles entry for /run/S exists, moves /etc/S/env to /etc/S/<project>.env
 // and swaps in the fetched binary and unit exactly like Update: restart,
-// health check, and the script's binary and unit become the .prev pair.
+// health check, and the script's binary and unit become the .prev pair;
+// last, /etc/S is given group S.
 // Any failure after the env move restores the binary and unit, moves the
 // env file back, removes a tmpfiles entry Adopt created, and restarts the
 // old unit.
@@ -80,6 +81,12 @@ func (h *Host) Adopt(ctx context.Context, t Target) error {
 	}
 	if err := in.commit(b); err != nil {
 		fmt.Fprintf(h.Out, "warning: %v; rollback of %s is unavailable until the next update\n", err, in.unit)
+	}
+	// The script left /etc/S root:root; give it the group install does, so
+	// the service can read its own files there and a later install after an
+	// uninstall recognises it. The service already runs, so only warn.
+	if err := h.Sys.Chown(p.EnvDir(s), "root:"+s); err != nil {
+		fmt.Fprintf(h.Out, "warning: chown %s root:%s: %v\n", Paths{}.EnvDir(s), s, err)
 	}
 	return nil
 }
