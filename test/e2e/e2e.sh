@@ -350,7 +350,7 @@ assert_file /var/lib/old/served
 assert_mode /run/old "750 old:old"
 assert_file /run/old/old.ready
 assert_eq "$(st '.services.old.refs.fixture | "\(.unit) \(.channel)"')" "old latest" "state of old"
-assert_eq "$(st '.services.old.created_user')" false "created_user of old (the user existed)"
+assert_eq "$(st '.services.old.created_user // false')" false "created_user of old (the user existed)"
 rm -rf /etc/old.pre-ship /opt/old.pre-ship
 
 log "9. uninstall: the sidecar, then fixture (config, data and user kept), reinstall, then --purge"
