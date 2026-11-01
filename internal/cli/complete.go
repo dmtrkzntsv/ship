@@ -190,7 +190,7 @@ func refreshListing(ctx context.Context, st store.Store) {
 	if os.Geteuid() != 0 {
 		return
 	}
-	refreshListingTo(ctx, st, cache.DefaultPath)
+	refreshListingTo(ctx, st, completionEnv.cachePath)
 }
 
 func refreshListingTo(ctx context.Context, st store.Store, path string) {

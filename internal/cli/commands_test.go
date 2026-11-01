@@ -43,8 +43,10 @@ func useFakeApp(t *testing.T) *fakeEnv {
 		state: state.File{Path: filepath.Join(t.TempDir(), "state.json")},
 		sys:   &host.FakeSys{},
 	}
-	oldA, oldE := newApp, execFn
-	t.Cleanup(func() { newApp, execFn = oldA, oldE })
+	oldA, oldE, oldCache := newApp, execFn, completionEnv.cachePath
+	t.Cleanup(func() { newApp, execFn, completionEnv.cachePath = oldA, oldE, oldCache })
+	// Root runs refresh the listing cache; keep it off the host's real one.
+	completionEnv.cachePath = filepath.Join(t.TempDir(), "listing.json")
 	newApp = func(out, errOut io.Writer) (*app.App, error) {
 		a := &app.App{
 			Cfg: env.cfg, Out: out, Err: errOut, State: env.state,
@@ -323,8 +325,9 @@ func TestExecArgvMissingBinary(t *testing.T) {
 }
 
 func TestGitCommit(t *testing.T) {
-	head := gitCommit()
-	assert.Regexp(t, `^[0-9a-f]{40,64}$`, head, "the test runs inside the ship checkout")
+	if exec.Command("git", "rev-parse", "HEAD").Run() == nil {
+		assert.Regexp(t, `^[0-9a-f]{40,64}$`, gitCommit(), "inside a git checkout")
+	}
 
 	t.Chdir(t.TempDir())
 	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(mustGetwd(t)))

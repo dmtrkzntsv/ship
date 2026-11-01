@@ -113,6 +113,9 @@ func TestRefreshHelpersSkipWhenNotRoot(t *testing.T) {
 }
 
 func TestCompletionStore(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("as root, completionStore reads only /etc/ship/config.toml")
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	for _, k := range []string{"SHIP_R2_ENDPOINT", "SHIP_R2_ACCESS_KEY_ID", "SHIP_R2_SECRET_ACCESS_KEY", "SHIP_R2_BUCKET"} {

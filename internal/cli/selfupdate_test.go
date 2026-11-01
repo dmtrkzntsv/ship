@@ -164,6 +164,9 @@ func TestSelfUpdateErrors(t *testing.T) {
 		assert.Contains(t, err.Error(), "parse state")
 	})
 	t.Run("state not writable", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root ignores directory permissions")
+		}
 		env, exe := selfUpdateEnv(t)
 		dir := filepath.Dir(env.state.Path)
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "state.lock"), nil, 0o644))

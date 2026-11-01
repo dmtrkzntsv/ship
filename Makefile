@@ -17,7 +17,8 @@ cover:
 	go test -coverpkg=./internal/... -coverprofile=coverage.out ./internal/...
 	@go tool cover -func=coverage.out | awk -v min=$(COVER_MIN) '/^total:/ { \
 		sub("%", "", $$3); printf "coverage %s%% (minimum %s%%)\n", $$3, min; \
-		if ($$3 + 0 < min) { print "coverage below minimum"; exit 1 } }'
+		seen = 1; if ($$3 + 0 < min) { print "coverage below minimum"; exit 1 } } \
+		END { if (!seen) { print "no coverage total"; exit 1 } }'
 
 lint:
 	go vet ./...
