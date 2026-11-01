@@ -7,8 +7,8 @@ branding:
 inputs:
   version:
     description: >-
-      Release to install: a full tag (v1.2.3), a major tag (v1, newest v1.x.y),
-      or latest. Default: the ref this action is used at (@v1, @v1.2.3), else latest.
+      Release to install: a full tag (v1.2.3), a major tag (v0, newest v0.x.y),
+      or latest. Default: the ref this action is used at (@v0, @v0.1.0), else latest.
     required: false
     default: ''
 

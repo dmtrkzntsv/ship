@@ -85,7 +85,7 @@ cdn-upload:
 From a GitHub workflow:
 
 ```yaml
-- uses: dmtrkzntsv/ship@v1        # installs ship onto the PATH, takes no credentials
+- uses: dmtrkzntsv/ship@v0        # installs ship onto the PATH, takes no credentials
 - run: make cdn-upload VERSION="$VERSION" CHANNELS=latest
   env:
     VERSION: ${{ needs.tag.outputs.version }}
@@ -94,7 +94,7 @@ From a GitHub workflow:
     SHIP_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
 ```
 
-The action's optional `version` input picks another release (`v1.2.3`, `v1`,
+The action's optional `version` input picks another release (`v0.1.0`, `v0`,
 `latest`); it outputs the installed `version`.
 
 ## Unit templates
