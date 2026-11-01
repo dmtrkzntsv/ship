@@ -133,3 +133,11 @@ func TestS3Options(t *testing.T) {
 	assert.Equal(t, "s", o.SecretAccessKey)
 	assert.Equal(t, "b", o.Bucket)
 }
+
+func TestReadErrorIsError(t *testing.T) {
+	// A directory is neither missing nor permission-denied: Load must not skip it.
+	dir := t.TempDir()
+	next := writeFile(t, dir, "next.toml", fileBody, 0o600)
+	_, _, _, err := Load(env(nil), []string{dir, next})
+	assert.ErrorContains(t, err, "read "+dir)
+}

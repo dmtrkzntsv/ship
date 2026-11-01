@@ -4,8 +4,6 @@ import (
 	"errors"
 
 	"github.com/spf13/cobra"
-
-	"github.com/dmtrkzntsv/ship/internal/app"
 )
 
 func newLogsCmd() *cobra.Command {
@@ -24,7 +22,7 @@ func newLogsCmd() *cobra.Command {
 			if lines <= 0 {
 				return errors.New("-n must be positive")
 			}
-			a, err := app.New(cmd.OutOrStdout(), cmd.ErrOrStderr())
+			a, err := newApp(cmd.OutOrStdout(), cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
@@ -32,7 +30,7 @@ func newLogsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return execArgv(argv)
+			return execFn(argv)
 		},
 	}
 	f := cmd.Flags()

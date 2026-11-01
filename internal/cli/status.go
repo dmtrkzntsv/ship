@@ -2,8 +2,6 @@ package cli
 
 import (
 	"github.com/spf13/cobra"
-
-	"github.com/dmtrkzntsv/ship/internal/app"
 )
 
 func newStatusCmd() *cobra.Command {
@@ -13,7 +11,7 @@ func newStatusCmd() *cobra.Command {
 		Short: "Show installed services, refs, versions and unit state",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			a, err := app.New(cmd.OutOrStdout(), cmd.ErrOrStderr())
+			a, err := newApp(cmd.OutOrStdout(), cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}

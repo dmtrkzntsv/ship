@@ -3,7 +3,9 @@ package host_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -156,4 +158,63 @@ func TestUninstallLastPurgeKeepsUserShipDidNotCreate(t *testing.T) {
 	assert.NotContains(t, fs.Calls, "DeleteUser tw")
 	assert.True(t, fs.UserExists("tw"))
 	assert.Empty(t, out.String())
+}
+
+func TestUninstallFileRemovalFails(t *testing.T) {
+	// A non-empty directory where a file is expected cannot be removed.
+	for _, tc := range []struct {
+		name string
+		path func(p host.Paths) string
+		last bool
+	}{
+		{"unit file", func(p host.Paths) string { return p.UnitPath("twillingate-sql") }, false},
+		{"tmpfiles entry", func(p host.Paths) string { return p.Tmpfiles("tw") }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, fs, _ := installTwo(t)
+			path := tc.path(h.Paths)
+			require.NoError(t, os.Remove(path))
+			require.NoError(t, os.MkdirAll(filepath.Join(path, "sub"), 0o755))
+
+			err := h.Uninstall(context.Background(), "tw", sqlRef, "twillingate-sql", tc.last, false, true)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), path)
+			assert.DirExists(t, filepath.Join(path, "sub"))
+			assert.NotContains(t, fs.Calls, "DeleteUser tw")
+		})
+	}
+}
+
+func TestUninstallDaemonReloadFails(t *testing.T) {
+	h, fs, _ := installTwo(t)
+	fs.ReloadErr = errors.New("reload failed")
+	err := h.Uninstall(context.Background(), "tw", sqlRef, "twillingate-sql", true, true, true)
+	require.Error(t, err)
+	assert.Equal(t, "daemon-reload: reload failed", err.Error())
+	assert.NoFileExists(t, h.Paths.UnitPath("twillingate-sql"))
+	assert.DirExists(t, h.Paths.DataDir("tw"), "nothing past the reload is removed")
+	assert.NotContains(t, fs.Calls, "systemctl reset-failed twillingate-sql")
+}
+
+func TestUninstallLastChownEnvDirFails(t *testing.T) {
+	h, fs, out := installTwo(t)
+	ctx := context.Background()
+	require.NoError(t, h.Uninstall(ctx, "tw", sqlRef, "twillingate-sql", false, false, true))
+	fs.Fail = map[string]error{"Chown " + h.Paths.EnvDir("tw") + " root:tw": errors.New("chown failed")}
+	err := h.Uninstall(ctx, "tw", twRef, "twillingate", true, false, true)
+	assert.EqualError(t, err, "chown failed")
+	assert.NoDirExists(t, h.Paths.BinDir("tw"))
+	assert.DirExists(t, h.Paths.EnvDir("tw"))
+	assert.Empty(t, out.String())
+}
+
+func TestUninstallLastDeleteUserFails(t *testing.T) {
+	h, fs, _ := installTwo(t)
+	ctx := context.Background()
+	require.NoError(t, h.Uninstall(ctx, "tw", sqlRef, "twillingate-sql", false, false, true))
+	fs.Fail = map[string]error{"DeleteUser tw": errors.New("userdel: exit status 8")}
+	err := h.Uninstall(ctx, "tw", twRef, "twillingate", true, true, true)
+	assert.EqualError(t, err, "delete user tw: userdel: exit status 8")
+	assert.NoDirExists(t, h.Paths.DataDir("tw"))
+	assert.True(t, fs.UserExists("tw"))
 }

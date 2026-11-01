@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -143,4 +144,16 @@ func TestRefreshListingSavesAndIgnoresErrors(t *testing.T) {
 
 	// unwritable path: must not panic or report
 	refreshListingTo(context.Background(), m, filepath.Join(p, "x", "l.json"))
+}
+
+func TestCompleteEdgeCases(t *testing.T) {
+	setupCompletion(t, map[string][]string{"econumo": {"econumo"}})
+	assert.Empty(t, complete(t, "versions", "econumo", ""), "only the first argument is a project")
+	assert.Empty(t, complete(t, "update", "econumo", ""), "only the first argument is a ref")
+	assert.Empty(t, complete(t, "install", "Bad/Ref/x", "--version", ""), "no channels for an invalid ref")
+
+	// A corrupt state file yields no installed refs or services.
+	require.NoError(t, os.WriteFile(completionEnv.statePath, []byte("{broken"), 0o644))
+	assert.Empty(t, complete(t, "update", ""))
+	assert.Empty(t, complete(t, "update", "--service", ""))
 }
