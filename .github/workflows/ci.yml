@@ -12,7 +12,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: make lint test
+      - run: make lint cover
 
   e2e:
     runs-on: ubuntu-latest
