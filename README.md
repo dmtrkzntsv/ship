@@ -42,7 +42,7 @@ Copy [config.example.toml](config.example.toml) to `/etc/ship/config.toml` (mode
 endpoint = "https://<account_id>.r2.cloudflarestorage.com"
 access_key_id = "…"
 secret_access_key = "…"
-bucket = "lab"
+bucket = "ship"
 
 [cloudflare]
 api_token = "…"     # Zone > Cache Purge on every zone you purge
@@ -98,7 +98,7 @@ From a GitHub workflow:
     SHIP_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
 ```
 
-The bucket defaults to `lab`; set `SHIP_R2_BUCKET` for another one.
+The bucket defaults to `ship`; set `SHIP_R2_BUCKET` for another one.
 
 The action's optional `version` input picks another release (`v0.1.0`, `v0`,
 `latest`); it outputs the installed `version`. Without it, the action installs
