@@ -107,7 +107,6 @@ func TestCompleteProjectsForVersionsAndPrune(t *testing.T) {
 	setupCompletion(t, nil)
 	assert.Equal(t, []string{"econumo", "winterflow"}, complete(t, "versions", ""))
 	assert.Equal(t, []string{"econumo", "winterflow"}, complete(t, "prune", ""))
-	assert.Equal(t, []string{"econumo", "winterflow"}, complete(t, "adopt", ""))
 }
 
 func TestCompleteNeverFailsWithoutStateOrCache(t *testing.T) {

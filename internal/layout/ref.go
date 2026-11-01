@@ -14,7 +14,7 @@ var (
 	versionRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 )
 
-// reservedServices are names install and adopt refuse as a service: system
+// reservedServices are names install refuses as a service: system
 // users and top-level directories a service's user, /opt/S, /etc/S or
 // /var/lib/S would collide with.
 var reservedServices = map[string]bool{

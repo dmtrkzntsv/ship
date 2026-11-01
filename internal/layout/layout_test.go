@@ -86,6 +86,21 @@ func TestRenderUnit(t *testing.T) {
 	assert.NoError(t, CheckUnitTemplate("{{BIN}}"))
 }
 
+func TestRenderUnitComments(t *testing.T) {
+	p := Placeholders{Service: "tw", DataDir: "/var/lib/tw"}
+	// Comment lines may mention placeholders in prose: unknown ones are left
+	// as written, known ones are filled in like anywhere else.
+	tmpl := "# ship fills in the {{...}} placeholders\n  ; see {{FOO}}\n# data in {{DATA_DIR}}\nUser={{USER}}\n"
+	out, err := RenderUnit(tmpl, p)
+	require.NoError(t, err)
+	assert.Equal(t, "# ship fills in the {{...}} placeholders\n  ; see {{FOO}}\n# data in /var/lib/tw\nUser=tw\n", out)
+	assert.NoError(t, CheckUnitTemplate(tmpl))
+
+	// a placeholder after a value is not a comment
+	_, err = RenderUnit("Description=x # {{FOO}}\n", p)
+	assert.Error(t, err)
+}
+
 func writeFiles(t *testing.T, files map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()

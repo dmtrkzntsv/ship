@@ -53,24 +53,50 @@ func TestInstallKeepsDataDirOwnedByServiceUser(t *testing.T) {
 	assert.False(t, e.state(t).Services["econumo"].CreatedUser)
 }
 
-func TestInstallLegacyLayoutPointsToAdoptFirst(t *testing.T) {
+func TestInstallKeepsEnvDirOfServiceGroup(t *testing.T) {
+	// Left behind by `ship uninstall` without --purge: /etc/S (root:S) with
+	// the env file and any hand-placed secrets is picked up again.
 	e := newEnv(t)
-	legacyFixture(t, e, "econumo", "econumo")
-	err := e.app.Install(context.Background(), app.InstallArgs{Ref: "econumo", Version: "dev"})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ship adopt econumo --service econumo")
+	etc := e.app.Host.Paths.EnvDir("econumo")
+	env := e.app.Host.Paths.EnvFile("econumo", "econumo")
+	require.NoError(t, os.MkdirAll(etc, 0o750))
+	require.NoError(t, os.WriteFile(env, []byte("SECRET=1\n"), 0o640))
+	e.sys.Users = map[string]bool{"econumo": true}
+	e.sys.Owners = map[string]string{etc: "root:econumo", env: "root:econumo"}
+
+	require.NoError(t, e.app.Install(context.Background(), app.InstallArgs{Ref: "econumo", Version: "dev"}))
+	assert.Equal(t, "SECRET=1\n", readFile(t, env))
 }
 
-func TestInstallAndAdoptRefuseReservedServiceNames(t *testing.T) {
+func TestInstallRefusesEnvDirOfOtherGroup(t *testing.T) {
+	e := newEnv(t)
+	etc := e.app.Host.Paths.EnvDir("econumo")
+	require.NoError(t, os.MkdirAll(etc, 0o750))
+	e.sys.Users = map[string]bool{"econumo": true}
+	e.sys.Owners = map[string]string{etc: "root:root"}
+	err := e.app.Install(context.Background(), app.InstallArgs{Ref: "econumo", Version: "dev"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "/etc/econumo already exists")
+}
+
+func TestUninstallThenReinstallKeepsConfig(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	require.NoError(t, e.app.Install(ctx, app.InstallArgs{Ref: "econumo", Version: "dev"}))
+	env := e.app.Host.Paths.EnvFile("econumo", "econumo")
+	require.NoError(t, os.WriteFile(env, []byte("SECRET=1\n"), 0o640))
+	require.NoError(t, e.app.Uninstall(ctx, app.UninstallArgs{Ref: "econumo"}))
+	require.NoError(t, e.app.Install(ctx, app.InstallArgs{Ref: "econumo", Version: "dev"}))
+	assert.Equal(t, "SECRET=1\n", readFile(t, env))
+
+	require.NoError(t, e.app.Uninstall(ctx, app.UninstallArgs{Ref: "econumo", Purge: true}))
+	assert.NoDirExists(t, e.app.Host.Paths.EnvDir("econumo"))
+}
+
+func TestInstallRefusesReservedServiceNames(t *testing.T) {
 	for _, name := range []string{"root", "ship", "systemd", "ssh", "sshd", "nobody", "etc", "opt", "var", "usr", "tmp", "run", "lib"} {
 		e := newEnv(t)
 		err := e.app.Install(context.Background(), app.InstallArgs{Ref: "econumo", Service: name, Version: "dev"})
-		require.Error(t, err, name)
-		assert.Contains(t, err.Error(), "reserved", name)
-
-		args := adoptArgs()
-		args.Service = name
-		err = e.app.Adopt(context.Background(), args)
 		require.Error(t, err, name)
 		assert.Contains(t, err.Error(), "reserved", name)
 		assert.Empty(t, e.sys.Calls)
@@ -103,13 +129,6 @@ func TestInstallRecordsCreatedUser(t *testing.T) {
 		require.NoError(t, e.app.Install(ctx, app.InstallArgs{Ref: "twillingate-sql", Service: "twillingate", Version: "v5"}))
 		assert.True(t, e.state(t).Services["twillingate"].CreatedUser)
 	})
-}
-
-func TestAdoptRecordsCreatedUser(t *testing.T) {
-	e := newEnv(t)
-	legacyFixture(t, e, "econumo-beta", "econumo")
-	require.NoError(t, e.app.Adopt(context.Background(), adoptArgs()))
-	assert.True(t, e.state(t).Services["econumo-beta"].CreatedUser)
 }
 
 func TestInstallRefusesNameCollisions(t *testing.T) {

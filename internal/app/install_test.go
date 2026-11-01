@@ -189,7 +189,7 @@ func TestInstallRefusesForeignUnit(t *testing.T) {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 		require.NoError(t, os.WriteFile(path, []byte("old"), 0o644))
 	}
-	t.Run("legacy layout", func(t *testing.T) {
+	t.Run("old deploy script layout", func(t *testing.T) {
 		e := newEnv(t)
 		p := e.app.Host.Paths
 		write(p.UnitPath("econumo"))
@@ -199,7 +199,7 @@ func TestInstallRefusesForeignUnit(t *testing.T) {
 
 		err := e.app.Install(context.Background(), app.InstallArgs{Ref: "econumo", Version: "dev"})
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "ship adopt econumo --service econumo")
+		assert.Contains(t, err.Error(), "ship won't take over existing paths")
 		assert.Equal(t, before, files(t, e.root))
 		assert.Empty(t, e.sys.Calls)
 		assert.Empty(t, e.state(t).Services)
@@ -212,7 +212,6 @@ func TestInstallRefusesForeignUnit(t *testing.T) {
 		err := e.app.Install(context.Background(), app.InstallArgs{Ref: "econumo", Service: "econumo-beta", Version: "dev"})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "remove it first")
-		assert.NotContains(t, err.Error(), "adopt")
 		assert.Equal(t, before, files(t, e.root))
 		assert.Empty(t, e.sys.Calls)
 		assert.Empty(t, e.state(t).Services)

@@ -136,7 +136,8 @@ cleanup() {
 	systemctl daemon-reload
 	for unit in "${UNITS[@]}"; do systemctl reset-failed "$unit" 2>/dev/null; done
 	for u in "${USERS[@]}"; do
-		rm -rf "/opt/${u:?}" "/etc/${u:?}" "/var/lib/${u:?}" "/run/${u:?}" "/etc/tmpfiles.d/ship-${u:?}.conf"
+		rm -rf "/opt/${u:?}" "/etc/${u:?}" "/var/lib/${u:?}" "/run/${u:?}" "/etc/tmpfiles.d/ship-${u:?}.conf" \
+			"/opt/${u:?}.pre-ship" "/etc/${u:?}.pre-ship"
 		getent passwd "$u" >/dev/null && userdel "$u"
 		getent group "$u" >/dev/null && groupdel "$u"
 	done
@@ -207,6 +208,7 @@ assert_eq "$(systemctl is-enabled e2e)" enabled "is-enabled e2e"
 assert_file /etc/e2e/fixture.env
 grep -qx 'PORT=' /etc/e2e/fixture.env || fail "env file was not seeded from fixture.env.example"
 assert_mode /etc/e2e/fixture.env "640 root:e2e"
+assert_mode /etc/e2e "750 root:e2e"
 assert_mode /var/lib/e2e "750 e2e:e2e"
 assert_mode /run/e2e "750 e2e:e2e"
 assert_mode /opt/e2e/fixture "755 root:root"
@@ -295,7 +297,7 @@ assert_contains "$out" '^latest +v15 ' "versions"
 # Pruning never affects what is installed.
 assert_running e2e 18080 v3
 
-log "8. existing paths are not taken over; the old deploy script's layout is adopted"
+log "8. existing paths are not taken over; a hand-installed service moves to ship with the README recipe"
 install -d -m 0755 /etc/old
 expect_fail install fixture --service old --version latest
 assert_contains "$LAST_OUT" "won't take over existing paths" "install over an existing /etc/old"
@@ -329,44 +331,61 @@ systemctl daemon-reload
 systemctl enable --now old
 wait_active old
 wait_served 18081 v1
+assert_file /var/lib/old/served
 expect_fail install fixture --service old --version latest
-assert_contains "$LAST_OUT" 'ship adopt fixture --service old' "install over the old layout"
-ship adopt fixture --service old --version latest
+assert_contains "$LAST_OUT" "won't take over existing paths" "install over the old layout"
+# the recipe: stop the old unit, move its files aside, install, restore the config
+systemctl disable --now old
+rm /etc/systemd/system/old.service
+systemctl daemon-reload
+mv /etc/old /etc/old.pre-ship
+mv /opt/old /opt/old.pre-ship
+ship install fixture --service old --version latest
+cat /etc/old.pre-ship/env >/etc/old/fixture.env
+ship start fixture --service old
 assert_running old 18081 v15
-assert_gone /etc/old/env
-assert_eq "$(cat /etc/old/fixture.env)" "PORT=18081" "/etc/old/fixture.env"
 assert_mode /etc/old/fixture.env "640 root:old"
-assert_eq "$(st '.services.old.refs.fixture | "\(.unit) \(.channel)"')" "old latest" "state of old"
-assert_eq "$(st '.services.old.created_user')" true "created_user of old"
-expect_fail rollback fixture --service old
-assert_contains "$LAST_OUT" 'nothing to roll back' "rollback right after adopt"
-assert_eq "$(/opt/old/fixture.prev version)" v1 "/opt/old/fixture.prev version"
-assert_file /opt/old/old.service.prev
+assert_mode /etc/old "750 root:old"
+assert_file /var/lib/old/served
 assert_mode /run/old "750 old:old"
 assert_file /run/old/old.ready
+assert_eq "$(st '.services.old.refs.fixture | "\(.unit) \(.channel)"')" "old latest" "state of old"
+assert_eq "$(st '.services.old.created_user // false')" false "created_user of old (the user existed)"
+rm -rf /etc/old.pre-ship /opt/old.pre-ship
 
-log "9. uninstall: the sidecar, then fixture (data and user kept), then old with --purge"
+log "9. uninstall: the sidecar, then fixture (config, data and user kept), reinstall, then --purge"
 ship uninstall fixture/sidecar --service e2e
 assert_gone /etc/systemd/system/e2e-sidecar.service
 assert_gone /opt/e2e/fixture-sidecar
-assert_gone /etc/e2e/sidecar.env
+assert_file /etc/e2e/sidecar.env
 assert_not_active e2e-sidecar
 assert_active e2e
 assert_eq "$(st '.services.e2e.refs["fixture/sidecar"]')" null "state of fixture/sidecar"
 ship uninstall fixture --service e2e
 assert_not_active e2e
-for p in /etc/systemd/system/e2e.service /opt/e2e /etc/e2e /run/e2e /etc/tmpfiles.d/ship-e2e.conf; do
+for p in /etc/systemd/system/e2e.service /opt/e2e /run/e2e /etc/tmpfiles.d/ship-e2e.conf; do
 	assert_gone "$p"
 done
 assert_file /var/lib/e2e/served
+assert_mode /etc/e2e "750 root:e2e"
+grep -qx 'PORT=18080' /etc/e2e/fixture.env || fail "uninstall without --purge lost the env file"
 assert_user e2e
 assert_eq "$(st '.services.e2e')" null "state of e2e"
+# a plain uninstall keeps /etc/e2e, and a new install picks it up again
+ship install fixture --service e2e --version latest
+grep -qx 'PORT=18080' /etc/e2e/fixture.env || fail "reinstall replaced the kept env file"
+ship uninstall fixture --service e2e --purge
+for p in /etc/systemd/system/e2e.service /opt/e2e /etc/e2e /run/e2e /var/lib/e2e /etc/tmpfiles.d/ship-e2e.conf; do
+	assert_gone "$p"
+done
+# the reinstall found user e2e already there, so ship no longer counts it as its own
+assert_user e2e
 ship uninstall fixture --service old --purge
 assert_not_active old
 for p in /etc/systemd/system/old.service /opt/old /etc/old /run/old /var/lib/old /etc/tmpfiles.d/ship-old.conf; do
 	assert_gone "$p"
 done
-assert_no_user old
+assert_user old # it existed before ship
 assert_eq "$(st '.services.old')" null "state of old"
 if [ "$MADE_STATE_DIR" = true ]; then
 	assert_contains "$(ship status)" '^no services installed$' "status after uninstall"

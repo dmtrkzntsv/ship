@@ -408,6 +408,10 @@ already installed in the chosen service.
 
 ## Migrating existing hosts
 
+> **Superseded (2026-10-31):** `ship adopt` was removed in favour of one
+> manual move per service, the same for every project (README, "Moving a
+> hand-installed service to ship"). The text below records the original design.
+
 Services installed by `econumo-deploy.sh` (unit at
 `/etc/systemd/system/S.service`, binary `/opt/S/<project>`, env
 `/etc/S/env`, data `/var/lib/S`) are taken over with an explicit
@@ -463,7 +467,7 @@ Services installed by `econumo-deploy.sh` (unit at
 - `release.json` added to every published channel.
 - Only `latest` and `dev` are moving channels.
 - Health check stays "unit stays active for 10 s".
-- Adoption is a separate `ship adopt` command that restarts with
+- (Removed 2026-10-31, see above.) Adoption is a separate `ship adopt` command that restarts with
   health check and rollback; no fallback unit.
 - Tool projects (binary, no unit) are publishable but not installable;
   `self-update` defaults to `latest`.

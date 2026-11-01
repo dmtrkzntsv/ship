@@ -8,7 +8,8 @@ inputs:
   version:
     description: >-
       Release to install: a full tag (v1.2.3), a major tag (v0, newest v0.x.y),
-      or latest. Default: the ref this action is used at (@v0, @v0.1.0), else latest.
+      or latest. Default: the ref this action is used at (@v0, @v0.1.0, or the
+      release tagged at a pinned commit SHA), else latest.
     required: false
     default: ''
 
@@ -46,7 +47,19 @@ runs:
 
         want="$INPUT_VERSION"
         if [[ -z "$want" ]]; then
-          if [[ "$ACTION_REF" =~ ^v[0-9] ]]; then want="$ACTION_REF"; else want=latest; fi
+          if [[ "$ACTION_REF" =~ ^v[0-9] ]]; then
+            want="$ACTION_REF"
+          elif [[ "$ACTION_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            # Pinned to a commit: install the release tagged at that commit,
+            # so the binary is pinned along with the action.
+            want=$(gh api --paginate "repos/$repo/tags?per_page=100" \
+              --jq ".[] | select(.commit.sha == \"$ACTION_REF\") | .name" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)
+            if [[ -z "$want" ]]; then
+              echo "::error::no ship release is tagged at $ACTION_REF; pass the version input"; exit 1
+            fi
+          else
+            want=latest
+          fi
         fi
 
         if [[ "$want" == latest ]]; then
