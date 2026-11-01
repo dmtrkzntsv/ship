@@ -26,21 +26,32 @@ type FakeSys struct {
 	// Owners maps a path to its "user:group"; Chown sets it, Owner reads it
 	// (a path never chowned has owner and group "").
 	Owners map[string]string
+	// Fail makes a call fail: a call whose recorded string (see Calls) is a
+	// key returns that error and has no effect. Owner, which is not recorded,
+	// is looked up as "Owner <path>".
+	Fail map[string]error
 }
 
 var _ Sys = (*FakeSys)(nil)
 
-func (f *FakeSys) record(format string, a ...any) {
-	f.Calls = append(f.Calls, fmt.Sprintf(format, a...))
+// record appends the call to Calls and returns its Fail error, if any.
+func (f *FakeSys) record(format string, a ...any) error {
+	call := fmt.Sprintf(format, a...)
+	f.Calls = append(f.Calls, call)
+	return f.Fail[call]
 }
 
 func (f *FakeSys) DaemonReload(context.Context) error {
-	f.record("DaemonReload")
+	if err := f.record("DaemonReload"); err != nil {
+		return err
+	}
 	return f.ReloadErr
 }
 
 func (f *FakeSys) Systemctl(_ context.Context, args ...string) error {
-	f.record("systemctl %s", strings.Join(args, " "))
+	if err := f.record("systemctl %s", strings.Join(args, " ")); err != nil {
+		return err
+	}
 	if len(args) < 2 {
 		return nil
 	}
@@ -69,7 +80,7 @@ func (f *FakeSys) Systemctl(_ context.Context, args ...string) error {
 }
 
 func (f *FakeSys) IsActive(_ context.Context, unit string) bool {
-	f.record("IsActive %s", unit)
+	_ = f.record("IsActive %s", unit)
 	if f.ActiveAfterRestart != nil {
 		return f.ActiveAfterRestart(unit)
 	}
@@ -77,19 +88,23 @@ func (f *FakeSys) IsActive(_ context.Context, unit string) bool {
 }
 
 func (f *FakeSys) JournalTail(_ context.Context, unit string, n int) string {
-	f.record("JournalTail %s %d", unit, n)
+	_ = f.record("JournalTail %s %d", unit, n)
 	return f.Journal
 }
 
 func (f *FakeSys) VerifyUnit(_ context.Context, path string) error {
-	f.record("VerifyUnit %s", path)
+	if err := f.record("VerifyUnit %s", path); err != nil {
+		return err
+	}
 	return f.VerifyErr
 }
 
 func (f *FakeSys) UserExists(name string) bool { return f.Users[name] }
 
 func (f *FakeSys) CreateUser(_ context.Context, name, home string) error {
-	f.record("CreateUser %s %s", name, home)
+	if err := f.record("CreateUser %s %s", name, home); err != nil {
+		return err
+	}
 	if f.Users == nil {
 		f.Users = map[string]bool{}
 	}
@@ -98,13 +113,17 @@ func (f *FakeSys) CreateUser(_ context.Context, name, home string) error {
 }
 
 func (f *FakeSys) DeleteUser(_ context.Context, name string) error {
-	f.record("DeleteUser %s", name)
+	if err := f.record("DeleteUser %s", name); err != nil {
+		return err
+	}
 	delete(f.Users, name)
 	return nil
 }
 
 func (f *FakeSys) Chown(path, owner string) error {
-	f.record("Chown %s %s", path, owner)
+	if err := f.record("Chown %s %s", path, owner); err != nil {
+		return err
+	}
 	if f.Owners == nil {
 		f.Owners = map[string]string{}
 	}
@@ -117,11 +136,13 @@ func (f *FakeSys) Chown(path, owner string) error {
 }
 
 func (f *FakeSys) Owner(path string) (string, string, error) {
+	if err := f.Fail["Owner "+path]; err != nil {
+		return "", "", err
+	}
 	u, g, _ := strings.Cut(f.Owners[path], ":")
 	return u, g, nil
 }
 
 func (f *FakeSys) CreateTmpfiles(_ context.Context, conf string) error {
-	f.record("CreateTmpfiles %s", conf)
-	return nil
+	return f.record("CreateTmpfiles %s", conf)
 }

@@ -7,7 +7,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/dmtrkzntsv/ship/internal/app"
 	"github.com/dmtrkzntsv/ship/internal/layout"
 	"github.com/dmtrkzntsv/ship/internal/release"
 )
@@ -30,7 +29,7 @@ func newPublishCmd() *cobra.Command {
 			if keep < 0 {
 				return &usageError{"--keep must be >= 0"}
 			}
-			a, err := app.New(cmd.OutOrStdout(), cmd.ErrOrStderr())
+			a, err := newApp(cmd.OutOrStdout(), cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}

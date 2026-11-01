@@ -2,6 +2,7 @@ package host_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/dmtrkzntsv/ship/internal/host"
 	"github.com/dmtrkzntsv/ship/internal/layout"
 )
 
@@ -65,4 +67,24 @@ func TestStartRestartStop(t *testing.T) {
 	err := h.Start(ctx, "twillingate-sql")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "boom")
+}
+
+func TestStartRestartStopSystemctlFails(t *testing.T) {
+	for _, tc := range []struct {
+		verb string
+		op   func(h *host.Host) error
+	}{
+		{"start", func(h *host.Host) error { return h.Start(context.Background(), "u") }},
+		{"stop", func(h *host.Host) error { return h.Stop(context.Background(), "u") }},
+		{"restart", func(h *host.Host) error { return h.Restart(context.Background(), "u") }},
+	} {
+		t.Run(tc.verb, func(t *testing.T) {
+			h, fs := newHost(t)
+			fs.Fail = map[string]error{"systemctl " + tc.verb + " u": errors.New("exit status 5")}
+			err := tc.op(h)
+			require.Error(t, err)
+			assert.Equal(t, tc.verb+" u: exit status 5", err.Error())
+			assert.Equal(t, []string{"systemctl " + tc.verb + " u"}, fs.Calls, "no health check after a failed command")
+		})
+	}
 }

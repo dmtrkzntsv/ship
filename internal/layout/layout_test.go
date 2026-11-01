@@ -176,3 +176,32 @@ func TestValidateChannel(t *testing.T) {
 		assert.Error(t, ValidateChannel(bad), bad)
 	}
 }
+
+func TestReservedServiceAndRefString(t *testing.T) {
+	assert.True(t, ReservedService("root"))
+	assert.True(t, ReservedService("ship"))
+	assert.False(t, ReservedService("econumo"))
+	assert.Equal(t, "winterflow/hub", Ref{Project: "winterflow", Component: "hub"}.String())
+	assert.Equal(t, "winterflow", Ref{Project: "winterflow"}.String())
+}
+
+func TestScanDirMoreErrors(t *testing.T) {
+	good := map[string]string{"winterflow-linux-amd64": "x", "winterflow-linux-arm64": "x"}
+
+	dir := writeFiles(t, good)
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "sub"), 0o755))
+	_, _, err := ScanDir("winterflow", dir)
+	assert.EqualError(t, err, "sub: unexpected directory")
+
+	dir = writeFiles(t, map[string]string{"winterflow-Hub-linux-amd64": "x", "winterflow-Hub-linux-arm64": "x"})
+	_, _, err = ScanDir("winterflow", dir)
+	assert.ErrorContains(t, err, `invalid asset name "winterflow-Hub"`)
+
+	if os.Geteuid() != 0 {
+		dir = writeFiles(t, good)
+		unit := filepath.Join(dir, "winterflow.service")
+		require.NoError(t, os.WriteFile(unit, []byte("[Service]\n"), 0o000))
+		_, _, err = ScanDir("winterflow", dir)
+		assert.ErrorIs(t, err, os.ErrPermission)
+	}
+}

@@ -101,3 +101,37 @@ func TestUpdateUnwritableDir(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sudo")
 }
+
+func TestUpdateNoWorkDir(t *testing.T) {
+	st, exe := publishShip(t), fakeExe(t)
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+	_, err := selfupdate.Update(context.Background(), st, "latest", exe, "v1", &bytes.Buffer{})
+	require.Error(t, err)
+	b, _ := os.ReadFile(exe)
+	assert.Equal(t, "old-binary", string(b))
+	ents, _ := os.ReadDir(filepath.Dir(exe))
+	assert.Len(t, ents, 1, "the replacement temp file is removed")
+}
+
+func TestUpdateUnknownChannel(t *testing.T) {
+	st, exe := publishShip(t), fakeExe(t)
+	_, err := selfupdate.Update(context.Background(), st, "v9", exe, "v1", &bytes.Buffer{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `channel "v9" not found for ship`)
+	b, _ := os.ReadFile(exe)
+	assert.Equal(t, "old-binary", string(b))
+}
+
+func TestUpdateCannotReplaceExe(t *testing.T) {
+	st := publishShip(t)
+	// exe is a non-empty directory, so the final rename fails.
+	exe := filepath.Join(t.TempDir(), "ship")
+	require.NoError(t, os.MkdirAll(filepath.Join(exe, "keep"), 0o755))
+	var out bytes.Buffer
+	_, err := selfupdate.Update(context.Background(), st, "latest", exe, "v1", &out)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "replace "+exe)
+	assert.Empty(t, out.String())
+	ents, _ := os.ReadDir(filepath.Dir(exe))
+	assert.Len(t, ents, 1, "the replacement temp file is removed")
+}

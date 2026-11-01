@@ -3,10 +3,12 @@ package sums
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -77,4 +79,22 @@ func TestVerify(t *testing.T) {
 	err = s.Verify("econumo-darwin-arm64", strings.NewReader("content"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "econumo-darwin-arm64: not listed")
+}
+
+func TestComputeUnreadable(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "sub"), 0o755))
+	_, err := Compute(dir, []string{"sub"})
+	assert.ErrorContains(t, err, "hash sub: ")
+}
+
+func TestParseLineTooLong(t *testing.T) {
+	_, err := Parse([]byte(hexOf("x") + "  " + strings.Repeat("a", 1<<20) + "\n"))
+	assert.Error(t, err)
+}
+
+func TestVerifyReadError(t *testing.T) {
+	s := Sums{"f": hexOf("x")}
+	err := s.Verify("f", iotest.ErrReader(errors.New("reset")))
+	assert.EqualError(t, err, "f: read: reset")
 }

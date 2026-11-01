@@ -14,6 +14,10 @@ import (
 	"github.com/dmtrkzntsv/ship/internal/store"
 )
 
+// fetch is release.Fetch; tests replace it to reach the failures that can
+// only happen after a verified download.
+var fetch = release.Fetch
+
 // Run fetches ship/<channel>/ (verified against SHA256SUMS) and atomically
 // replaces exe with the binary for this host's arch. It returns the version
 // that was installed.
@@ -41,11 +45,7 @@ func Update(ctx context.Context, st store.Store, channel, exe, current string, o
 	}
 	defer os.RemoveAll(work)
 
-	ref, err := layout.ParseRef("ship")
-	if err != nil {
-		return "", err
-	}
-	f, err := release.Fetch(ctx, st, ref, channel, release.HostArch(), work)
+	f, err := fetch(ctx, st, layout.Ref{Project: "ship"}, channel, release.HostArch(), work)
 	if err != nil {
 		return "", err
 	}

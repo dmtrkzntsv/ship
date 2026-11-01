@@ -8,7 +8,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/dmtrkzntsv/ship/internal/app"
 	"github.com/dmtrkzntsv/ship/internal/layout"
 	"github.com/dmtrkzntsv/ship/internal/selfupdate"
 )
@@ -23,14 +22,14 @@ func newSelfUpdateCmd() *cobra.Command {
 			if runtime.GOOS != "linux" {
 				return fmt.Errorf("ship self-update: R2 only holds Linux builds; use: brew upgrade ship")
 			}
-			exe, err := os.Executable()
+			exe, err := executable()
 			if err != nil {
 				return err
 			}
 			if exe, err = filepath.EvalSymlinks(exe); err != nil {
 				return err
 			}
-			a, err := app.New(cmd.OutOrStdout(), cmd.ErrOrStderr())
+			a, err := newApp(cmd.OutOrStdout(), cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
@@ -77,3 +76,7 @@ func newSelfUpdateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&version, "version", "", "channel to update to and remember: a version, latest or dev (default: the remembered channel, else latest)")
 	return cmd
 }
+
+// executable is the path of the running binary; tests replace it so
+// self-update rewrites a temp file instead of the test binary.
+var executable = os.Executable

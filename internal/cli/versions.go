@@ -6,7 +6,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/dmtrkzntsv/ship/internal/app"
 	"github.com/dmtrkzntsv/ship/internal/layout"
 	"github.com/dmtrkzntsv/ship/internal/release"
 )
@@ -22,7 +21,7 @@ func newVersionsCmd() *cobra.Command {
 			if err != nil {
 				return &usageError{err.Error()}
 			}
-			a, err := app.New(cmd.OutOrStdout(), cmd.ErrOrStderr())
+			a, err := newApp(cmd.OutOrStdout(), cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}

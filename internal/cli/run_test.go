@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -75,4 +76,21 @@ func TestLogsRejectsNonPositiveLines(t *testing.T) {
 	err := root.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "-n must be positive")
+}
+
+func TestRunErrors(t *testing.T) {
+	env := useFakeApp(t)
+	installedState(t, env.state)
+	oldG := runGuard
+	t.Cleanup(func() { runGuard = oldG })
+	runGuard = func(string) error { return nil }
+
+	_, _, err := runCLI(t, "run", "other", "--", "x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not installed")
+	assert.Empty(t, env.exec, "nothing is run for an unknown ref")
+
+	newApp = func(io.Writer, io.Writer) (*app.App, error) { return nil, errors.New("bad config") }
+	_, _, err = runCLI(t, "run", "econumo")
+	assert.EqualError(t, err, "bad config")
 }
