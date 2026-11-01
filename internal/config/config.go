@@ -15,7 +15,7 @@ import (
 // SystemPath is the host-wide config file.
 const SystemPath = "/etc/ship/config.toml"
 
-const defaultBucket = "lab"
+const defaultBucket = "ship"
 
 type Config struct {
 	R2         R2         `toml:"r2"`

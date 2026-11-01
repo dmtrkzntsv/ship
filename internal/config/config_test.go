@@ -60,7 +60,7 @@ func TestEnvOverridesFile(t *testing.T) {
 func TestDefaultBucket(t *testing.T) {
 	cfg, _, _, err := Load(env(nil), nil)
 	require.NoError(t, err)
-	assert.Equal(t, "lab", cfg.R2.Bucket)
+	assert.Equal(t, "ship", cfg.R2.Bucket)
 }
 
 func TestNoFileEnvOnly(t *testing.T) {

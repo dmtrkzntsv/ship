@@ -78,7 +78,7 @@ same way, with:
 
 ## Repository bucket layout
 
-Bucket is configurable, default `lab` (it is being recreated as a generic
+Bucket is configurable, default `ship` (was `lab` until v0.3.0) (it is being recreated as a generic
 bucket; nothing depends on the name).
 
 ```
