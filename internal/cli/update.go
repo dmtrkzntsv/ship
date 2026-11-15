@@ -31,7 +31,7 @@ func newUpdateCmd() *cobra.Command {
 	}
 	f := cmd.Flags()
 	f.StringVar(&service, "service", "", "service the ref is installed in (default: the ref's project)")
-	f.StringVar(&version, "version", "", "channel to update to and remember: a version, latest or dev (default: the remembered channel)")
+	f.StringVar(&version, "version", "", "channel to update to and remember: a version or a moving channel (latest, dev, edge, ...) (default: the remembered channel)")
 	f.StringVar(&cfZone, "cf-zone", "", "set or replace the service's Cloudflare zone id (saved when the update succeeds)")
 	f.BoolVar(&purgeCache, "purge-cache", false, "purge the service's Cloudflare cache after the version changed (needs SHIP_CF_API_TOKEN)")
 	registerServiceCompletion(cmd, false)

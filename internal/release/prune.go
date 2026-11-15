@@ -34,7 +34,7 @@ type PrunePlan struct {
 // Prune deletes old immutable versions of a project: it keeps the newest
 // o.Keep (versions a moving channel points to are protected and do not count),
 // and with OlderThan deletes only those that are also older than that.
-// Moving channel folders are never touched.
+// Moving channel folders (see VersionInfo.Moving) are never touched.
 func Prune(ctx context.Context, st store.Store, o PruneOptions) (PrunePlan, error) {
 	var plan PrunePlan
 	if !layout.ValidName(o.Project) {
@@ -55,17 +55,25 @@ func Prune(ctx context.Context, st store.Store, o PruneOptions) (PrunePlan, erro
 		return plan, err
 	}
 
+	moving := map[string]bool{}
+	for _, v := range all {
+		if v.Moving() {
+			moving[v.Channel] = true
+		}
+	}
 	// A moving channel whose release.json cannot be read might point to any
-	// version; pruning without knowing which could delete it.
+	// version; pruning without knowing which could delete it. (Only latest
+	// and dev can get here: other channels are moving because of it.)
 	pointed := map[string]bool{}
 	for _, v := range all {
-		if !layout.IsMoving(v.Channel) {
+		if !moving[v.Channel] {
 			continue
 		}
 		if v.Release == nil {
 			return plan, fmt.Errorf("cannot prune %s: channel %s has no readable %s", o.Project, v.Channel, ReleaseFile)
 		}
-		if !layout.IsMoving(v.Release.Version) {
+		// A channel-only publish names the channel itself as its version.
+		if !moving[v.Release.Version] && !layout.BuiltinChannel(v.Release.Version) {
 			pointed[v.Release.Version] = true
 		}
 	}
@@ -75,7 +83,7 @@ func Prune(ctx context.Context, st store.Store, o PruneOptions) (PrunePlan, erro
 	var candidates []VersionInfo
 	for _, v := range all {
 		switch {
-		case layout.IsMoving(v.Channel):
+		case moving[v.Channel]:
 		case pointed[v.Channel]:
 			plan.Protected = append(plan.Protected, v.Channel)
 			delete(pointed, v.Channel)

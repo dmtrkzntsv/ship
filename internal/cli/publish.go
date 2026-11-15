@@ -53,7 +53,7 @@ func newPublishCmd() *cobra.Command {
 	f := cmd.Flags()
 	f.StringVar(&path, "path", "", "folder with the built files")
 	f.StringVar(&version, "version", "", "release version (immutable channel)")
-	f.StringSliceVar(&channels, "channels", nil, "moving channels to update (latest,dev)")
+	f.StringSliceVar(&channels, "channels", nil, "moving channels to create or move: latest, dev or any name like edge (a lowercase letter, then a-z 0-9 - _)")
 	f.IntVar(&keep, "keep", 10, "versions to keep after publishing (0 disables pruning)")
 	f.StringVar(&bucket, "bucket", "", "R2 bucket (overrides config)")
 	_ = cmd.MarkFlagRequired("path")

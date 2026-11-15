@@ -100,7 +100,9 @@ component (`winterflow-hub-linux-amd64`, `winterflow-hub.service`). This
 matches the names econumo, billing and winterflow already produce.
 
 `release.json` exists so that a host on a moving channel can report the real
-version it runs (`latest` → `v1.4.2`).
+version it runs (`latest` → `v1.4.2`). In a moving channel's folder it also
+carries `"channel": "<the folder's name>"`; that field is what makes a folder a
+moving channel rather than an immutable version (see *Moving channels*).
 
 ## Publishing
 
@@ -114,7 +116,7 @@ cdn-upload:
 	ship publish econumo --path release-out --version $(VERSION) --channels $(CHANNELS)
 ```
 
-`ship publish <project> --path DIR [--version V] [--channels latest,dev] [--keep N] [--bucket B]`
+`ship publish <project> --path DIR [--version V] [--channels C[,C...]] [--keep N] [--bucket B]`
 
 - `--path` — folder with the built files (binaries, `*.service`, optional
   `*.env.example`).
@@ -122,7 +124,8 @@ cdn-upload:
   the immutable channel. Optional: without it only the `--channels` are
   updated and no version folder is created — econumo's dev publishes work
   this way today. At least one of `--version` / `--channels` is required.
-- `--channels` — moving channels to also update (`latest`, `dev`).
+- `--channels` — moving channels to also create or update: `latest`, `dev`
+  or any other valid channel name (`edge`); see *Moving channels*.
 - `--keep` — version channels to keep after publishing, default `10`; `0`
   disables pruning.
 
@@ -144,6 +147,29 @@ Behaviour:
   the installer always verifies against it, so a host racing an upload fails
   the checksum instead of installing a mixed set.
 - `version` must match `^[A-Za-z0-9._-]+$` and must not be `latest`/`dev`.
+- A channel name must match `^[a-z][a-z0-9_-]*$`. `--channels X` is refused
+  when `<project>/X/` holds an immutable version (a `release.json` without
+  `"channel": "X"`, or a `SHA256SUMS` without `release.json`); `--version X`
+  is refused when `<project>/X/` is a moving channel; the same name in both
+  flags is refused. All of this is checked before the first upload.
+
+### Moving channels
+
+(Added 2026-11-15.) Any channel name works, so a project can add `edge`,
+`beta` or `nightly` without a ship change. Publish writes
+`"channel": "<name>"` into the `release.json` of every channel folder
+(`latest` and `dev` included) and leaves it out of version folders. Readers
+decide per folder: a folder is a moving channel when it is `latest` or `dev`
+(moving by name, also in buckets published before the field existed) or when
+its `release.json` names it. A folder without a readable `release.json` is a
+version unless it is `latest`/`dev`.
+
+Hosts need nothing new: `install`/`update --version X` remember `X` and every
+`update` reads `X/SHA256SUMS` afresh, so a channel is followed and a version
+stays put (it never changes). The marker matters where the bucket is managed:
+prune never deletes a moving channel, and publish keeps channels and versions
+from taking over each other's folders. The completion listing reads no
+`release.json` and does not distinguish the two.
 - After a fully successful publish it prunes the project to `--keep`
   versions (owner's decision: automatic, 10 by default). A prune failure
   exits non-zero but never undoes the publish.
@@ -180,7 +206,8 @@ so `@v1` keeps working.
   reported as such).
 - Keeps the newest `N` (default 10); with `--older-than` deletes only versions
   that are also older than that.
-- Never deletes `latest`, `dev`, or any version a moving channel's
+- Never deletes a moving channel (`latest`, `dev`, or any folder whose
+  `release.json` names it as a channel), or any version a moving channel's
   `release.json` currently points to (those do not count toward `N`).
 - Without `--yes` it only prints what it would delete and the bytes freed.
 - Needs write credentials, taken from `SHIP_R2_*` environment variables
@@ -465,7 +492,8 @@ Services installed by `econumo-deploy.sh` (unit at
 - macOS builds; host commands are Linux-only.
 - Laptop write credentials in `~/.config/ship/config.toml`.
 - `release.json` added to every published channel.
-- Only `latest` and `dev` are moving channels.
+- Only `latest` and `dev` are moving channels. (Superseded 2026-11-15: any
+  valid channel name, marked by `"channel"` in its `release.json`.)
 - Health check stays "unit stays active for 10 s".
 - (Removed 2026-10-31, see above.) Adoption is a separate `ship adopt` command that restarts with
   health check and rollback; no fallback unit.

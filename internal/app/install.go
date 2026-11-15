@@ -13,7 +13,8 @@ import (
 )
 
 // InstallArgs are the inputs of `ship install`. Service defaults to the
-// ref's project; Version is the channel to install (a version or latest/dev).
+// ref's project; Version is the channel to install (a version or a
+// moving channel).
 type InstallArgs struct{ Ref, Service, Version, CFZone string }
 
 // Install downloads and verifies a release, lays it out on the host as a new
@@ -148,10 +149,11 @@ func (e noUnitError) Error() string {
 
 func (e noUnitError) Unwrap() error { return release.ErrNoUnit }
 
-// validateChannel accepts a moving channel (latest, dev) or a valid version.
+// validateChannel accepts a moving channel (latest, dev, edge, ...) or a
+// valid version.
 func validateChannel(ch string) error {
 	if ch == "" {
-		return errors.New("--version is required (a version, latest or dev)")
+		return errors.New("--version is required (a version or a moving channel such as latest, dev or edge)")
 	}
 	return layout.ValidateChannel(ch)
 }

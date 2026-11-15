@@ -23,7 +23,20 @@ var base = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 // seed writes a version folder with a binary and a release.json.
 func seed(t *testing.T, m *storetest.Mem, channel, version string, at time.Time, size int) {
 	t.Helper()
-	rel, err := json.Marshal(release.Release{Project: "econumo", Version: version, PublishedAt: at})
+	seedRelease(t, m, channel, release.Release{Project: "econumo", Version: version, PublishedAt: at}, size)
+}
+
+// seedChannel writes a moving channel folder as publish does now, with the
+// channel field in its release.json.
+func seedChannel(t *testing.T, m *storetest.Mem, channel, version string, at time.Time, size int) {
+	t.Helper()
+	seedRelease(t, m, channel, release.Release{Project: "econumo", Version: version, Channel: channel, PublishedAt: at}, size)
+}
+
+func seedRelease(t *testing.T, m *storetest.Mem, channel string, r release.Release, size int) {
+	t.Helper()
+	at := r.PublishedAt
+	rel, err := json.Marshal(r)
 	require.NoError(t, err)
 	p := "econumo/" + channel + "/"
 	m.Objects[p+"econumo-linux-amd64"] = storetest.MemObject{Data: bytes.Repeat([]byte("x"), size), LastModified: at}
@@ -251,4 +264,49 @@ func TestPublishAutoPruneReadOnlyMessageOnce(t *testing.T) {
 	err := release.Publish(context.Background(), m, o)
 	require.Error(t, err)
 	assert.Equal(t, 1, strings.Count(err.Error(), "R2 refused the write"), err.Error())
+}
+
+func TestPruneNeverTouchesCustomChannels(t *testing.T) {
+	m := prunable(t)
+	// edge: a channel-only publish, newer than every version.
+	seedChannel(t, m, "edge", "edge", base.AddDate(0, 1, 0), 100)
+	// beta points to v1, the oldest version.
+	seedChannel(t, m, "beta", "v1", base.AddDate(0, 1, 0), 100)
+	// A version that merely has a channel-like name.
+	seed(t, m, "nightly", "nightly", base.AddDate(0, 0, -1), 100)
+	plan, err := release.Prune(context.Background(), m, release.PruneOptions{Project: "econumo", Keep: 0, Yes: true})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "nightly"}, names(plan.Delete))
+	assert.ElementsMatch(t, []string{"v13", "v2", "v1"}, plan.Protected, "edge's own name is not listed as a missing version")
+	for _, ch := range []string{"edge", "beta", "latest", "dev", "v1"} {
+		assert.Contains(t, m.Objects, "econumo/"+ch+"/release.json", ch)
+	}
+	assert.NotContains(t, m.Objects, "econumo/nightly/release.json")
+}
+
+func TestPruneTreatsUnmarkedCustomNameAsVersion(t *testing.T) {
+	m := prunable(t)
+	// A folder whose release.json names another channel is not a channel.
+	seedRelease(t, m, "edge", release.Release{Project: "econumo", Version: "edge", Channel: "other", PublishedAt: base}, 1)
+	plan, err := release.Prune(context.Background(), m, release.PruneOptions{Project: "econumo", Keep: 10})
+	require.NoError(t, err)
+	assert.Contains(t, names(plan.Delete), "edge")
+}
+
+func TestPublishAutoPruneKeepsCustomChannel(t *testing.T) {
+	m := storetest.NewMem()
+	ctx := context.Background()
+	o := opts(fixture(t))
+	o.Channels = []string{"edge"}
+	require.NoError(t, release.Publish(ctx, m, o))
+	for i := 1; i <= 3; i++ {
+		o := opts(fixture(t))
+		o.Version, o.Keep = fmt.Sprintf("v%d", i), 1
+		o.Now = func() time.Time { return fixedNow.Add(time.Duration(i) * time.Hour) }
+		require.NoError(t, release.Publish(ctx, m, o))
+	}
+	vs, err := release.Versions(ctx, m, "econumo")
+	require.NoError(t, err)
+	// v3 is protected as just published, v2 is the one kept; edge stays.
+	assert.ElementsMatch(t, []string{"v3", "v2", "edge"}, names(vs))
 }

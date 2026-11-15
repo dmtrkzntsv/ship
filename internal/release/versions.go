@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/dmtrkzntsv/ship/internal/layout"
 	"github.com/dmtrkzntsv/ship/internal/store"
 )
 
@@ -19,6 +20,13 @@ type VersionInfo struct {
 	Estimated   bool      // true when PublishedAt came from LastModified
 	Bytes       int64
 	Keys        []string
+}
+
+// Moving reports whether the folder is a moving channel: latest or dev, or
+// a folder whose release.json names it as its channel. A folder without a
+// readable release.json is a version unless it is latest or dev.
+func (v VersionInfo) Moving() bool {
+	return layout.BuiltinChannel(v.Channel) || (v.Release != nil && v.Release.Channel == v.Channel)
 }
 
 // Versions lists every channel folder of project, newest first (ties broken by
