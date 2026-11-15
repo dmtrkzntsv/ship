@@ -69,8 +69,8 @@ Build your project, put the finished files in a folder, and publish it:
 ```
 
 `ship publish` writes `release.json` and `SHA256SUMS`, uploads to
-`<project>/<version>/`, then replaces the moving channels (`latest`, `dev`) and
-prunes old versions (default: keep 10; versions a channel points to and the one
+`<project>/<version>/`, then replaces the moving channels given in `--channels`
+and prunes old versions (default: keep 10; versions a channel points to and the one
 just published are always kept). Versions are immutable: an existing version is
 refused, except a folder left without `SHA256SUMS` by a failed publish (replaced)
 and the identical build (skipped, so a retry still updates the channels).
@@ -78,6 +78,16 @@ and the identical build (skipped, so a retry still updates the channels).
 `--version` is optional: `ship publish econumo --path DIR --channels dev` updates
 only the `dev` channel and creates no version folder, which suits builds of every
 commit. At least one of `--version` and `--channels` is required.
+
+A moving channel can have any name: a lowercase letter, then lowercase letters,
+digits, `-` and `_` (`latest`, `dev`, `edge`, `beta-2`; never `1.2.3`). Its
+`release.json` carries `"channel": "<name>"`, which is how ship tells a channel
+from a version without any host configuration: hosts installed or updated with
+`--version edge` follow every new build of `edge`, and prune never deletes a
+channel. `latest` and `dev` are channels by name even in buckets published
+before this field existed. A name already published as a version cannot become
+a channel, and a channel's name cannot be published as a version; pick another
+name.
 
 From a Makefile, so local and CI publishes are identical:
 

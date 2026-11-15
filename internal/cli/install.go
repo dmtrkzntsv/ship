@@ -30,7 +30,7 @@ func newInstallCmd() *cobra.Command {
 	}
 	f := cmd.Flags()
 	f.StringVar(&service, "service", "", "service to install into (default: the ref's project)")
-	f.StringVar(&version, "version", "", "channel to install: a version, latest or dev")
+	f.StringVar(&version, "version", "", "channel to install: a version or a moving channel (latest, dev, edge, ...)")
 	f.StringVar(&cfZone, "cf-zone", "", "Cloudflare zone id to purge for this service")
 	_ = cmd.MarkFlagRequired("version")
 	registerServiceCompletion(cmd, true)

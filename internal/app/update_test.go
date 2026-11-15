@@ -218,6 +218,41 @@ func TestAppUpdateRepublishedChannel(t *testing.T) {
 	assert.Equal(t, second, rs.PrevPublishedAt)
 }
 
+// A custom moving channel works like dev: install remembers it and every
+// update fetches its newest build.
+func TestAppInstallUpdateCustomChannel(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	first, second := fixedNow.Add(time.Minute), fixedNow.Add(2*time.Minute)
+	publishAt(t, e.store, first, "econumo", "", []string{"edge"}, true, "econumo")
+	require.NoError(t, e.app.Install(ctx, app.InstallArgs{Ref: "econumo", Service: "econumo-edge", Version: "edge"}))
+	rs := e.state(t).Services["econumo-edge"].Refs["econumo"]
+	assert.Equal(t, "edge", rs.Channel)
+	assert.Equal(t, first, rs.PublishedAt)
+
+	publishAt(t, e.store, second, "econumo", "", []string{"edge"}, true, "econumo")
+	e.sys.Calls = nil
+	require.NoError(t, e.app.Update(ctx, app.UpdateArgs{Ref: "econumo", Service: "econumo-edge"}))
+	assert.Contains(t, e.sys.Calls, "systemctl restart econumo-edge")
+	rs = e.state(t).Services["econumo-edge"].Refs["econumo"]
+	assert.Equal(t, "edge", rs.Channel)
+	assert.Equal(t, second, rs.PublishedAt)
+
+	// A release that also moves edge is picked up with its real version.
+	publishAt(t, e.store, second.Add(time.Minute), "econumo", "v2.0.0", []string{"latest", "edge"}, true, "econumo")
+	require.NoError(t, e.app.Update(ctx, app.UpdateArgs{Ref: "econumo", Service: "econumo-edge"}))
+	rs = e.state(t).Services["econumo-edge"].Refs["econumo"]
+	assert.Equal(t, "edge", rs.Channel)
+	assert.Equal(t, "v2.0.0", rs.Version)
+
+	// Switching a ref installed from dev to edge remembers it.
+	require.NoError(t, e.app.Install(ctx, app.InstallArgs{Ref: "econumo", Service: "econumo-beta", Version: "dev"}))
+	require.NoError(t, e.app.Update(ctx, app.UpdateArgs{Ref: "econumo", Service: "econumo-beta", Version: "edge"}))
+	rs = e.state(t).Services["econumo-beta"].Refs["econumo"]
+	assert.Equal(t, "edge", rs.Channel)
+	assert.Equal(t, "v2.0.0", rs.Version)
+}
+
 func readFile(t *testing.T, path string) string {
 	t.Helper()
 	b, err := os.ReadFile(path)

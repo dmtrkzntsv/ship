@@ -35,8 +35,10 @@ type PublishOptions struct {
 }
 
 // Publish uploads the files in o.Dir to <project>/<version>/ (if a version is
-// given) and to each moving channel. Everything is validated before the first
-// upload; SHA256SUMS is always uploaded last within a folder.
+// given) and to each moving channel, whose release.json names the channel
+// (Release.Channel). Everything is validated before the first upload: a
+// channel cannot take over an existing version's folder nor a version a
+// channel's. SHA256SUMS is always uploaded last within a folder.
 func Publish(ctx context.Context, st store.Store, o PublishOptions) error {
 	if o.Version == "" && len(o.Channels) == 0 {
 		return errors.New("nothing to publish: give --version and/or --channels")
@@ -47,8 +49,11 @@ func Publish(ctx context.Context, st store.Store, o PublishOptions) error {
 		}
 	}
 	for _, c := range o.Channels {
-		if !layout.IsMoving(c) {
-			return fmt.Errorf("channel %q is not a moving channel: --channels accepts only latest and dev (use --version for an immutable release)", c)
+		if err := layout.ValidateChannelName(c); err != nil {
+			return err
+		}
+		if c == o.Version {
+			return fmt.Errorf("%q is given as both --version and --channels; a folder is either an immutable version or a moving channel", c)
 		}
 	}
 	if !layout.ValidName(o.Project) {
@@ -73,6 +78,11 @@ func Publish(ctx context.Context, st store.Store, o PublishOptions) error {
 		return err
 	}
 
+	for _, c := range o.Channels {
+		if err := checkChannelFolder(ctx, st, o.Project, c); err != nil {
+			return err
+		}
+	}
 	skipVersion := false
 	if o.Version != "" {
 		if skipVersion, err = checkExistingVersion(ctx, st, o, base); err != nil {
@@ -82,8 +92,8 @@ func Publish(ctx context.Context, st store.Store, o PublishOptions) error {
 
 	// Each target folder gets its own release.json (the version field is the
 	// channel name when no --version is given), hence its own SHA256SUMS.
-	upload := func(prefix, version, cacheControl string) error {
-		rel, err := json.MarshalIndent(Release{Project: o.Project, Version: version, Commit: o.Commit, PublishedAt: publishedAt}, "", "  ")
+	upload := func(prefix, version, channel, cacheControl string) error {
+		rel, err := json.MarshalIndent(Release{Project: o.Project, Version: version, Channel: channel, Commit: o.Commit, PublishedAt: publishedAt}, "", "  ")
 		if err != nil {
 			return err
 		}
@@ -109,7 +119,7 @@ func Publish(ctx context.Context, st store.Store, o PublishOptions) error {
 
 	if o.Version != "" && !skipVersion {
 		prefix := o.Project + "/" + o.Version + "/"
-		if err := upload(prefix, o.Version, immutableCacheControl); err != nil {
+		if err := upload(prefix, o.Version, "", immutableCacheControl); err != nil {
 			return err
 		}
 		fmt.Fprintf(o.Out, "published %s\n", prefix)
@@ -120,7 +130,7 @@ func Publish(ctx context.Context, st store.Store, o PublishOptions) error {
 		if version == "" {
 			version = c
 		}
-		if err := upload(prefix, version, movingCacheControl); err != nil {
+		if err := upload(prefix, version, c, movingCacheControl); err != nil {
 			return err
 		}
 		if err := removeStale(ctx, st, prefix, append(append([]string{}, files...), ReleaseFile, SumsFile)); err != nil {
@@ -132,17 +142,50 @@ func Publish(ctx context.Context, st store.Store, o PublishOptions) error {
 	return pruneAfterPublish(ctx, st, o)
 }
 
+// checkChannelFolder refuses to make <project>/<channel>/ a moving channel
+// when it already holds an immutable version: a release.json without the
+// channel field, or a SHA256SUMS without any release.json. An empty folder,
+// an existing moving channel, latest/dev, and a folder left by a failed
+// first publish (neither file) are fine: the upload replaces them.
+func checkChannelFolder(ctx context.Context, st store.Store, project, channel string) error {
+	if layout.BuiltinChannel(channel) {
+		return nil
+	}
+	prefix := project + "/" + channel + "/"
+	rel, err := readRelease(ctx, st, prefix+ReleaseFile)
+	if err != nil {
+		return err
+	}
+	if rel != nil && rel.Channel == channel {
+		return nil
+	}
+	if rel == nil {
+		if _, err := readAll(ctx, st, prefix+SumsFile); errors.Is(err, store.ErrNotFound) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+	}
+	return fmt.Errorf("%s/%s is already published as an immutable version, so it cannot become a moving channel; pick another channel name", project, channel)
+}
+
 // checkExistingVersion looks at an existing <project>/<version>/ folder.
-// One without SHA256SUMS is left over from a failed publish: its objects are
-// deleted and the version is published normally. One whose SHA256SUMS lists
-// exactly the files of this build (release.json aside) is already published:
-// skip reports that its upload can be skipped. Anything else is refused,
-// because versions are immutable.
+// One whose release.json names it as a channel is a moving channel and is
+// refused. One without SHA256SUMS is left over from a failed publish: its
+// objects are deleted and the version is published normally. One whose
+// SHA256SUMS lists exactly the files of this build (release.json aside) is
+// already published: skip reports that its upload can be skipped. Anything
+// else is refused, because versions are immutable.
 func checkExistingVersion(ctx context.Context, st store.Store, o PublishOptions, base sums.Sums) (skip bool, err error) {
 	prefix := o.Project + "/" + o.Version + "/"
 	existing, err := st.List(ctx, prefix)
 	if err != nil || len(existing) == 0 {
 		return false, err
+	}
+	if rel, err := readRelease(ctx, st, prefix+ReleaseFile); err != nil {
+		return false, err
+	} else if rel != nil && rel.Channel == o.Version {
+		return false, fmt.Errorf("%s/%s is a moving channel; versions are immutable, publish under another version", o.Project, o.Version)
 	}
 	raw, err := readAll(ctx, st, prefix+SumsFile)
 	if errors.Is(err, store.ErrNotFound) {

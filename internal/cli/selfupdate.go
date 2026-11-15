@@ -73,7 +73,7 @@ func newSelfUpdateCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&version, "version", "", "channel to update to and remember: a version, latest or dev (default: the remembered channel, else latest)")
+	cmd.Flags().StringVar(&version, "version", "", "channel to update to and remember: a version or a moving channel (latest, dev, edge, ...) (default: the remembered channel, else latest)")
 	return cmd
 }
 

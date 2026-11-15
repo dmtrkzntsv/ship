@@ -49,9 +49,10 @@ func TestUnitName(t *testing.T) {
 }
 
 func TestChannelsAndFiles(t *testing.T) {
-	assert.True(t, IsMoving("latest"))
-	assert.True(t, IsMoving("dev"))
-	assert.False(t, IsMoving("v1.0.0"))
+	assert.True(t, BuiltinChannel("latest"))
+	assert.True(t, BuiltinChannel("dev"))
+	assert.False(t, BuiltinChannel("edge"))
+	assert.False(t, BuiltinChannel("v1.0.0"))
 	assert.True(t, ValidName("a_b-1"))
 	assert.False(t, ValidName("_a"))
 	assert.Equal(t, "x-hub-linux-arm64", BinaryFile("x-hub", "arm64"))
@@ -168,8 +169,17 @@ func TestScanDirErrors(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestValidateChannelName(t *testing.T) {
+	for _, ok := range []string{"latest", "dev", "edge", "beta-2", "nightly_x", "v2"} {
+		assert.NoError(t, ValidateChannelName(ok), ok)
+	}
+	for _, bad := range []string{"", "1.2.3", "2edge", "Edge", "edge.1", "-edge", "_edge", "a b", "a/b", ".."} {
+		assert.Error(t, ValidateChannelName(bad), bad)
+	}
+}
+
 func TestValidateChannel(t *testing.T) {
-	for _, ok := range []string{"latest", "dev", "v1.2.3"} {
+	for _, ok := range []string{"latest", "dev", "edge", "v1.2.3"} {
 		assert.NoError(t, ValidateChannel(ok), ok)
 	}
 	for _, bad := range []string{"a b", "", ".", ".."} {

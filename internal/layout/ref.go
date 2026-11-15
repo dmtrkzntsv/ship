@@ -12,6 +12,7 @@ import (
 var (
 	nameRe    = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 	versionRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+	channelRe = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 )
 
 // reservedServices are names install refuses as a service: system
@@ -33,15 +34,28 @@ type Ref struct{ Project, Component string }
 // ValidName reports whether s is a valid project, component or service name.
 func ValidName(s string) bool { return nameRe.MatchString(s) }
 
-// IsMoving reports whether channel is a moving channel (latest or dev).
-func IsMoving(channel string) bool { return channel == "latest" || channel == "dev" }
+// BuiltinChannel reports whether name is latest or dev. These are moving
+// channels by name alone, also in buckets published before release.json
+// carried the "channel" field that marks every other moving channel, and
+// they can never be used as a version.
+func BuiltinChannel(name string) bool { return name == "latest" || name == "dev" }
+
+// ValidateChannelName checks a name given to publish --channels: a lowercase
+// letter, then lowercase letters, digits, - and _. Starting with a letter and
+// having no dot keeps channel names apart from version numbers like 1.2.3.
+func ValidateChannelName(c string) error {
+	if !channelRe.MatchString(c) {
+		return fmt.Errorf("invalid channel name %q: use a lowercase letter, then lowercase letters, digits, - and _ (e.g. latest, dev, edge)", c)
+	}
+	return nil
+}
 
 // ValidateVersion checks that v is usable as an immutable version channel.
 func ValidateVersion(v string) error {
 	if v == "" {
 		return fmt.Errorf("version must not be empty")
 	}
-	if IsMoving(v) {
+	if BuiltinChannel(v) {
 		return fmt.Errorf("version %q is a moving channel name", v)
 	}
 	if v == "." || v == ".." {
@@ -53,9 +67,13 @@ func ValidateVersion(v string) error {
 	return nil
 }
 
-// ValidateChannel accepts a moving channel (latest, dev) or a valid version.
+// ValidateChannel checks a name given to install, update or self-update
+// --version: latest, dev, or any name valid as a version, which includes
+// every valid moving channel name. Whether it is a moving channel or an
+// immutable version is the bucket's business (see release.Release.Channel);
+// a host fetches it the same way either way.
 func ValidateChannel(c string) error {
-	if IsMoving(c) {
+	if BuiltinChannel(c) {
 		return nil
 	}
 	return ValidateVersion(c)

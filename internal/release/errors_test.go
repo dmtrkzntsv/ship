@@ -135,3 +135,27 @@ func TestFetchUnwritableDir(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrPermission)
 	assert.Contains(t, err.Error(), filepath.Join(dir, "econumo-linux-amd64"))
 }
+
+func TestPublishFolderCheckStoreErrors(t *testing.T) {
+	for name, tc := range map[string]struct {
+		version  string
+		channels []string
+		set      func(*faultyStore)
+	}{
+		"channel release.json": {"", []string{"edge"}, func(f *faultyStore) { f.getErr = map[string]error{"econumo/edge/release.json": errBoom} }},
+		"channel SHA256SUMS":   {"", []string{"edge"}, func(f *faultyStore) { f.getErr = map[string]error{"econumo/edge/SHA256SUMS": errBoom} }},
+		"version release.json": {"v1", nil, func(f *faultyStore) {
+			f.Objects["econumo/v1/x"] = storetest.MemObject{Data: []byte("x")}
+			f.getErr = map[string]error{"econumo/v1/release.json": errBoom}
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := &faultyStore{Mem: storetest.NewMem()}
+			tc.set(f)
+			o := opts(fixture(t))
+			o.Version, o.Channels = tc.version, tc.channels
+			assert.ErrorIs(t, release.Publish(context.Background(), f, o), errBoom)
+			assert.Empty(t, f.PutOrder)
+		})
+	}
+}

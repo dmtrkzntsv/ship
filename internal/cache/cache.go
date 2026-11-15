@@ -43,7 +43,10 @@ type ProjectEntry struct {
 
 // Refresh lists every project in the store. Components are the "<project>-X"
 // units in the SHA256SUMS of the project's newest channel: latest, else the
-// newest version by name, else dev.
+// last other channel by name (usually the newest version; a custom moving
+// channel like edge may win, which lists components just as well), else dev.
+// The listing only serves completion, so it reads no release.json to tell
+// moving channels from versions.
 func Refresh(ctx context.Context, st store.Store) (Listing, error) {
 	projects, err := st.ListDirs(ctx, "")
 	if err != nil {
@@ -75,7 +78,7 @@ func newestChannel(channels []string) string {
 		if c == "latest" {
 			return c
 		}
-		if !layout.IsMoving(c) {
+		if !layout.BuiltinChannel(c) {
 			newest = c // channels are sorted by name; the last one wins
 		}
 	}
