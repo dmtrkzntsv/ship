@@ -398,16 +398,18 @@ if [ "$MADE_STATE_DIR" = true ]; then
 fi
 
 log "10. auto-update: a timer installed with --auto-update, ship update --auto picks up a new dev build"
-ship publish fixture --path "$WORK/v1" --channels dev
+ship publish fixture --path "$WORK/v1" --version v1 --channels dev
 ship install fixture --service e2e --version dev --auto-update
 printf 'PORT=18080\n' >/etc/e2e/fixture.env
 assert_file /etc/systemd/system/ship-auto-update.service
 assert_file /etc/systemd/system/ship-auto-update.timer
 assert_eq "$(systemctl is-enabled ship-auto-update.timer)" enabled "is-enabled ship-auto-update.timer"
+# the real timer must not race the test's own runs; a manual run still works
+systemctl stop ship-auto-update.timer
 assert_eq "$(st '.services.e2e.refs.fixture.auto_update')" true "auto_update after install"
 ship start fixture --service e2e
 assert_running e2e 18080 v1
-ship publish fixture --path "$WORK/v3" --channels dev
+ship publish fixture --path "$WORK/v3" --version v3 --channels dev
 ship update --auto
 assert_running e2e 18080 v3
 assert_eq "$(st '.services.e2e.refs.fixture.auto_update')" true "auto_update after the automatic update"
