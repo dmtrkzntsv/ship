@@ -13,6 +13,8 @@ operator decides otherwise.
   and has auto-update on is updated within minutes of a publish, with the same
   checksum verification, health check and automatic rollback as `ship update`.
 - Goal: off by default; turned on per install (owner's decision).
+- Goal: a failed automatic update stops auto-update on that install until the
+  operator turns it back on (owner's decision).
 - Non-goal: updating the `ship` binary itself (`ship self-update` stays manual).
 - Non-goal: instant delivery; a few minutes of delay is fine.
 - Goal: a notification to one configured channel (Telegram for the owner)
@@ -59,29 +61,33 @@ does not stop the others; the run exits non-zero if any failed, so
 details. *My call:* if another ship command holds the state lock, the run logs
 that and exits 0; the next tick retries.
 
-**Failed builds and rollback** (*my call*; this is the anti-goal above). When
-an automatic update fails its health check and is rolled back, ship records
-that build (version + publish time) as `skip` on the ref, and later runs leave
-it alone until a different build is published. A manual `ship rollback` on an
-auto-updating ref records the build it rolled back from the same way, so the
-next tick does not undo the operator. A manual `ship update` ignores and clears
-`skip`.
+**Failed updates stop auto-update** (owner's decision, 2026-11-15). Any
+automatic update that fails turns auto-update off for that ref, after the
+host has done what it does today (restore the previous pair). Nothing is
+updated on that ref again until the operator looks and turns it back on with
+`ship update <ref> --auto-update` (a manual `ship update` without the flag
+updates once and leaves it off). This replaces an earlier `skip`-a-build
+design: there is no skip list. The cost, accepted: on a dev box one bad build
+stops updates even if a fixed one follows minutes later. State records
+`auto_update_stopped_at`, and `ship status` shows `stopped` instead of `on`/`-`
+so a stopped ref is not mistaken for one never opted in; turning auto-update
+on or off clears it.
 
-*My call (after the builder check):* a build that is broken before the unit is
-touched is treated like a failed health check (`skip` + one "Failed"
-message): checksum mismatch, no build for the host's arch, no asset,
-`release.json` naming another project, no unit file, a unit that does not
-verify. A missing channel, R2 or network errors and a rejected key are
-"can't check" (below). `release` and `host` return typed errors so the run can
-tell the two apart. A health check cut short by shutdown (SIGTERM during the
-run) is not a failed build: the existing interrupt path restores the previous
-pair and nothing is skipped or notified.
+What counts as a failed update (*my call, after the builder check*): the
+health check fails and the update is rolled back ("Failed"); the build is
+broken before the unit is touched: checksum mismatch, no build for the host's
+arch, no asset, `release.json` naming another project, no unit file, a unit
+that does not verify ("Failed"); the update fails and restoring the previous
+binary and unit fails too, or the previous build does not come back up
+("Down"). A missing channel, R2 or network errors and a rejected key are not
+failed updates but "can't check" (below): nothing was installed, auto-update
+stays on. `release` and `host` return typed errors so the run can tell these
+apart. A health check cut short by shutdown (SIGTERM during the run) is not a
+failed update: the existing interrupt path restores the previous pair,
+auto-update stays on and nothing is notified.
 
-**Rollback fails too** (owner's decision: keep going). When the update fails
-and restoring the previous binary and unit fails as well, or the previous
-build does not come back up, ship sends an urgent "Down" message (below),
-marks the build `skip`, and leaves auto-update on, so a later fixed build can
-land on its own and bring the service back.
+*My call:* a manual `ship rollback` on an auto-updating ref also stops
+auto-update (and says so), so the next tick does not undo the operator.
 
 **Cloudflare cache.** *My call:* an automatic update that changed the version
 purges the service's cache when the service has a stored zone and a CF token is
@@ -111,14 +117,15 @@ module only once a third project needs it). Standard library only.
 | Event | When | Message (illustrative) |
 | --- | --- | --- |
 | Updated | an automatic update succeeded | `homelab: econumo (dev) 2026-11-15T10:02 → 2026-11-16T09:40` |
-| Failed | an automatic update failed its health check and was rolled back | `homelab: econumo (dev) build X failed, rolled back to Y`, plus the last journal lines the health check already collects |
-| Down | an automatic update failed and the rollback failed too | `homelab: econumo is DOWN — update to X failed and rollback to Y failed`, plus journal lines |
+| Failed | an automatic update failed (health check, or a broken build) and the previous version runs | `homelab: econumo (dev) build X failed, still on Y; auto-update stopped`, plus the error (with the journal lines the health check collects) |
+| Down | an automatic update failed and the rollback failed too | `homelab: econumo is DOWN — update to X failed and rollback to Y failed; auto-update stopped`, plus journal lines |
 | Can't check | runs could not fetch a ref's release (R2 or network down, bad key) continuously for 1 hour | `homelab: can't check econumo (dev) for updates since 14:02: <error>` |
 | Still can't check | every 24 hours while it continues | same, with the duration |
 | Checking again | the first successful fetch after "can't check" was sent | `homelab: econumo (dev) reachable again, was failing since 14:02 (3h)` |
 
-Runs where nothing changed never notify. A failed build notifies once: it is
-then `skip`ped (see above), so later runs leave it alone silently. *My call:*
+Runs where nothing changed never notify. A failed update notifies once:
+auto-update is then stopped on that ref (see above), so later runs leave it
+alone silently. *My call:*
 the "can't check" clock is per ref and kept in state (`check_failing_since`,
 `check_notified_at`), so a ship restart or a reboot does not re-announce or
 lose it; failures before the first hour notify nothing (no 3am false alarm

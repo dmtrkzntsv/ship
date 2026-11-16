@@ -15,6 +15,7 @@
 - Off by default; only refs with `auto_update` on are touched by `ship update --auto`.
 - Timer: `OnBootSec=2min`, `OnUnitActiveSec=5min`, `RandomizedDelaySec=1min`; service `Type=oneshot`, `ExecStart=<ship path> update --auto`.
 - Notifications only from `ship update --auto`; manual commands never notify.
+- Any failed automatic update (or a manual rollback) stops auto-update on that ref (`AutoUpdate=false`, `AutoUpdateStoppedAt=now`); there is no skip list.
 - "Can't check" grace: 1 hour; reminder every 24 hours; recovery message after one was sent.
 - Every message starts with `os.Hostname()` + `": "`.
 - Notify send: up to 3 attempts within ~30 s on `notify.ErrTemporary`; failure logged, run exits non-zero, update kept.
@@ -26,9 +27,9 @@
 
 1. A ref with auto-update on is pinned with `ship update --version 1.2.3` → refused with a message telling to pass `--auto-update=false` (Task 4 test `TestUpdatePinWithAutoUpdateRefused`).
 2. Two refs, the first's build is broken → the second still updates, run exits non-zero, one "Failed" message (Task 6 `TestAutoUpdateContinuesAfterFailure`).
-3. SIGTERM during an automatic update's health check → previous pair restored, no `skip`, no message (Task 6 `TestAutoUpdateInterruptNotSkipped`).
+3. SIGTERM during an automatic update's health check → previous pair restored, auto-update stays on, no message (Task 6 `TestAutoUpdateInterruptKeepsAutoUpdate`).
 4. Notify URL unset → automatic updates still run and nothing is sent (Task 6 `TestAutoUpdateWithoutNotifyURL`).
-5. A build `skip`ped, then the same build republished under the same version with a new publish time → it is a different build and is tried (Task 6 `TestAutoUpdateSkipMatchesPublishTime`).
+5. A stopped ref is updated by hand with `ship update <ref>` (no flag) → updates once, stays stopped; `--auto-update` turns it back on and clears `stopped` (Task 4 `TestManualUpdateKeepsStopped`).
 
 ---
 
@@ -61,7 +62,7 @@
 **Interfaces:**
 - Produces: `release.ErrBadBuild` (sentinel); `host.ErrBadBuild`, `host.ErrRolledBack`, `host.ErrRevertFailed` (sentinels). Existing messages unchanged (wrap with `%w` additionally; use `errors.Join` or `fmt.Errorf("%w: …")` so `errors.Is` works and the text stays as today).
 
-Classification (spec "Failed builds and rollback"):
+Classification (spec "Failed updates stop auto-update"):
 - `release.ErrBadBuild`: `no asset`, `no linux/<arch> build`, any `sums.Verify` failure (checksum mismatch, not listed), `release.json` naming another project, malformed `SHA256SUMS`, malformed `release.json`. NOT: `channel %q not found`, store errors.
 - `host.ErrBadBuild`: `renderVerified` failures (template error, `does not verify`).
 - `host.ErrRolledBack`: `revert` succeeded (returned "… previous version restored").
@@ -114,7 +115,7 @@ Classification (spec "Failed builds and rollback"):
 - [ ] **Step 4: Run** — Expected: PASS.
 - [ ] **Step 5: Commit** `feat(host): ship-auto-update timer and service units`
 
-### Task 4: The auto_update setting, skip, and status
+### Task 4: The auto_update setting, stopping, and status
 
 **Files:**
 - Modify: `internal/state/state.go`, `internal/app/install.go`, `internal/app/update.go`, `internal/app/ops.go` (Status), `internal/app/app.go`, tests in `internal/app/{install,update,app}_test.go`, `internal/state/state_test.go`
@@ -122,7 +123,7 @@ Classification (spec "Failed builds and rollback"):
 **Interfaces:**
 - Consumes: `host.EnsureAutoUpdateTimer`, `notify.Parse`, `config.Config.Notify.URL`.
 - Produces:
-  - `state.RefState` new fields: `AutoUpdate bool \`json:"auto_update,omitempty"\``, `SkipVersion string \`json:"skip_version,omitempty"\``, `SkipPublishedAt time.Time \`json:"skip_published_at,omitzero"\``, `CheckFailingSince time.Time \`json:"check_failing_since,omitzero"\``, `CheckNotifiedAt time.Time \`json:"check_notified_at,omitzero"\``.
+  - `state.RefState` new fields: `AutoUpdate bool \`json:"auto_update,omitempty"\``, `AutoUpdateStoppedAt time.Time \`json:"auto_update_stopped_at,omitzero"\``, `CheckFailingSince time.Time \`json:"check_failing_since,omitzero"\``, `CheckNotifiedAt time.Time \`json:"check_notified_at,omitzero"\``.
   - `InstallArgs.AutoUpdate bool`; `UpdateArgs.AutoUpdate *bool` (nil = unchanged).
   - `App.ShipPath func() (string, error)` (production: `os.Executable` then `filepath.EvalSymlinks`).
   - `func (a *App) enableAutoUpdate(ctx context.Context) error`: validates `a.Cfg.Notify.URL` with `notify.Parse` when non-empty (error returned as is), then `a.Host.EnsureAutoUpdateTimer(ctx, path)`.
@@ -132,16 +133,16 @@ Rules:
 - Turning on (`install --auto-update`, or update with `AutoUpdate=&true`) when the fetched release is not moving → `fmt.Errorf("%s follows version %s, which never changes; auto-update needs a moving channel (latest, dev, edge, …)", unit, channel)`, nothing changed. Validate the notify URL before touching the host.
 - An update that changes the channel to a non-moving one while `AutoUpdate` stays on → same refusal, plus `"; pass --auto-update=false to pin it"`.
 - Turning on calls `enableAutoUpdate` after the state save succeeds; if it fails, the command fails with the error (state keeps the flag; the next `--auto-update` retries).
-- Manual `Update` clears `SkipVersion`/`SkipPublishedAt` whenever it runs past the lock, including the "already on" path.
-- Manual `Rollback` on a ref with `AutoUpdate` sets `SkipVersion`/`SkipPublishedAt` to the version/publish time it rolled away from.
-- Turning auto-update off clears `CheckFailingSince`/`CheckNotifiedAt`.
-- `Status` header becomes `SERVICE  REF  UNIT  CHANNEL  VERSION  AUTO  STATE`; AUTO is `on` or `-`.
+- `func stopAutoUpdate(rs *state.RefState, now time.Time)`: `AutoUpdate=false`, `AutoUpdateStoppedAt=now`, clears `CheckFailingSince`/`CheckNotifiedAt`. Used by Task 6 and by Rollback.
+- Manual `Rollback` on a ref with `AutoUpdate` calls `stopAutoUpdate` and prints `<unit>: auto-update stopped; turn it back on with: ship update <ref> --service <S> --auto-update`.
+- Setting `--auto-update` either way clears `AutoUpdateStoppedAt`; turning it off also clears the check clock. A manual update without the flag leaves both as they are.
+- `Status` header becomes `SERVICE  REF  UNIT  CHANNEL  VERSION  AUTO  STATE`; AUTO is `on`, `stopped` or `-`.
 
-- [ ] **Step 1: Write failing tests**: `TestInstallAutoUpdate` (flag saved, `systemctl enable --now ship-auto-update.timer` in calls, timer file exists under root), `TestInstallAutoUpdateOnVersionRefused` (state unchanged, no unit written), `TestInstallAutoUpdateInvalidNotifyURL` (`Cfg.Notify.URL="bogus://x"` → error contains `invalid notification url`, nothing installed), `TestUpdateTurnsAutoUpdateOnAndOff`, `TestUpdatePinWithAutoUpdateRefused`, `TestUpdateClearsSkip`, `TestRollbackSetsSkipWhenAuto`, `TestRollbackNoSkipWhenManual`, `TestStatusShowsAuto` (exact table output).
+- [ ] **Step 1: Write failing tests**: `TestInstallAutoUpdate` (flag saved, `systemctl enable --now ship-auto-update.timer` in calls, timer file exists under root), `TestInstallAutoUpdateOnVersionRefused` (state unchanged, no unit written), `TestInstallAutoUpdateInvalidNotifyURL` (`Cfg.Notify.URL="bogus://x"` → error contains `invalid notification url`, nothing installed), `TestUpdateTurnsAutoUpdateOnAndOff`, `TestUpdatePinWithAutoUpdateRefused`, `TestManualUpdateKeepsStopped`, `TestRollbackStopsAutoUpdate`, `TestRollbackManualRefUnchanged`, `TestStatusShowsAuto` (exact table output; AUTO is `on`, `stopped` when `AutoUpdateStoppedAt` is set, else `-`).
 - [ ] **Step 2: Run** `go test ./internal/app/ ./internal/state/` — Expected: FAIL.
 - [ ] **Step 3: Implement** per the rules above; `newEnv` in tests sets `ShipPath` to return `/usr/local/bin/ship`.
 - [ ] **Step 4: Run** `go test ./internal/...` — Expected: PASS.
-- [ ] **Step 5: Commit** `feat(update): per-ref auto_update setting, skip on rollback, AUTO in status`
+- [ ] **Step 5: Commit** `feat(update): per-ref auto_update setting, stop on rollback, AUTO in status`
 
 ### Task 5: Notifier with retry and the run clock file
 
@@ -183,25 +184,25 @@ Run algorithm:
 1. Build the Notifier (`a.Notifier()`); an invalid URL returns the parse error immediately (unit fails; nothing else to tell).
 2. `a.State.Lock()`. If held: load the run clock, `observe(now, true)` with Reason `another ship run has held the state lock`, save it, notify per event, print `another ship run holds the state lock; trying again next run`, return nil. Any later run that gets the lock and reaches step 3's success resets the clock, so only an hour of consecutive locked runs alerts.
 3. Load state, then `a.NewStore()`. Either failing → run clock `observe(now,true)` with the error text as Reason (kept in the 0600 file), notify per event, return the error. Success → run clock `observe(now,false)`; `clockRecovered` notifies.
-4. For each service/ref (sorted by unit) with `AutoUpdate`: call `updateRef(..., quiet=true)` with a pre-check: before `host.Update`, if `f.Release.Version == rs.SkipVersion && f.Release.PublishedAt.Equal(rs.SkipPublishedAt)` → skip silently. (Implement the check inside `updateRef` via an optional `skip func(release.Release) bool` parameter or a field on a small args struct; builder's choice.)
+4. For each service/ref (sorted by unit) with `AutoUpdate`: call `updateRef(..., quiet=true)`. It must report the fetched version even on failure (return it alongside the error) so messages can name it.
 5. Classify the result:
    - nil, changed → ref clock `observe(false)`; message Updated; if `svc.CFZone != ""` and `a.checkToken()==nil` purge (failure: print, mark run failed); zone set but no token → print `cache not purged: no Cloudflare token`.
    - nil, unchanged → ref clock `observe(false)` (may send recovery).
-   - `release.ErrBadBuild`, `host.ErrBadBuild`, `host.ErrRolledBack` (and not `context.Canceled`) → set Skip to the fetched build; message Failed; run failed.
-   - `host.ErrRevertFailed` → set Skip; message Down; run failed.
-   - `context.Canceled` in chain → no skip, no message; stop the loop and return the error.
+   - `release.ErrBadBuild`, `host.ErrBadBuild`, `host.ErrRolledBack` (and not `context.Canceled`) → `stopAutoUpdate`; message Failed; run failed.
+   - `host.ErrRevertFailed` → `stopAutoUpdate`; message Down; run failed.
+   - `context.Canceled` in chain → auto-update stays on, no message; stop the loop and return the error.
    - anything else (channel not found, store/network) → ref clock `observe(true)`; message per event; run failed.
 6. Save state after each ref. Print one line per change or failure (`<unit>: <old> -> <new>`, `<unit>: <error>`). Return an error summarizing how many refs failed (or a notify failure) so the unit exits non-zero.
 
 Messages (`notify.Message.Title`, `Body` = details; host prefix added by Notifier):
 - Updated: Title `<unit> (<channel>) <old> → <new>` (use `republished`-style publish time when versions are equal).
-- Failed: Title `<unit> (<channel>) build <ver> failed, rolled back to <old>`, Body = the error text (carries the log lines).
-- Down: Title `<unit> is DOWN — update to <ver> failed and rollback to <old> failed`, Body = error text.
+- Failed: Title `<unit> (<channel>) build <ver> failed, still on <old>; auto-update stopped`, Body = the error text (carries the log lines).
+- Down: Title `<unit> is DOWN — update to <ver> failed and rollback to <old> failed; auto-update stopped`, Body = error text.
 - Can't check: Title `can't check <unit> (<channel>) for updates since <15:04>`, Body = error; still: `still can't check … (<dur>)`; recovered: `<unit> (<channel>) reachable again, was failing since <15:04> (<dur>)`.
 - Run clock: `automatic updates can't run since <15:04>` / `still can't run … (<dur>)` / `automatic updates running again, were failing since <15:04> (<dur>)`, Body = Reason.
 Times in the host's local zone; durations rounded to minutes (`3h12m`).
 
-- [ ] **Step 1: Write failing tests** (fake Notifier recording messages; `a.Now` stepped): `TestAutoUpdateUpdatesOptedInOnly`, `TestAutoUpdateQuietWhenNothingChanged` (no output, no message), `TestAutoUpdateBrokenBuildSkippedOnce` (checksum mismatch → Failed once; second run: no restart, no message), `TestAutoUpdateHealthFailSkipped`, `TestAutoUpdateRevertFailedSendsDown` (auto_update stays on, skip set), `TestAutoUpdateSkipMatchesPublishTime`, `TestAutoUpdateContinuesAfterFailure`, `TestAutoUpdateInterruptNotSkipped`, `TestAutoUpdateCantCheckAfterOneHour` (store errors at t0, t0+30m → nothing; t0+60m → can't check; t0+24h → nothing; t0+84h → still; success → recovered), `TestAutoUpdateChannelNotFoundIsCantCheck`, `TestAutoUpdateLockHeld` (returns nil, prints message; after >1h of held runs → run message), `TestAutoUpdateStateUnreadable` (garbage state.json → run clock, after 1h a message), `TestAutoUpdatePurgesWithZoneAndToken`, `TestAutoUpdateNoTokenSkipsPurge`, `TestAutoUpdateNotifyFailureExitsNonZero` (update kept in state), `TestAutoUpdateWithoutNotifyURL`, `TestAutoUpdateStateHoldsNoErrorText` (after a can't-check run, state.json contains no error substring).
+- [ ] **Step 1: Write failing tests** (fake Notifier recording messages; `a.Now` stepped): `TestAutoUpdateUpdatesOptedInOnly`, `TestAutoUpdateQuietWhenNothingChanged` (no output, no message), `TestAutoUpdateBrokenBuildStops` (checksum mismatch → Failed once, `AutoUpdate=false`, `AutoUpdateStoppedAt` set; a newer build then published: second run touches nothing, sends nothing), `TestAutoUpdateHealthFailStops`, `TestAutoUpdateRevertFailedSendsDown` (stopped), `TestAutoUpdateContinuesAfterFailure`, `TestAutoUpdateInterruptKeepsAutoUpdate`, `TestAutoUpdateCantCheckAfterOneHour` (store errors at t0, t0+30m → nothing; t0+60m → can't check; t0+24h → nothing; t0+84h → still; success → recovered), `TestAutoUpdateChannelNotFoundIsCantCheck`, `TestAutoUpdateLockHeld` (returns nil, prints message; after >1h of held runs → run message), `TestAutoUpdateStateUnreadable` (garbage state.json → run clock, after 1h a message), `TestAutoUpdatePurgesWithZoneAndToken`, `TestAutoUpdateNoTokenSkipsPurge`, `TestAutoUpdateNotifyFailureExitsNonZero` (update kept in state), `TestAutoUpdateWithoutNotifyURL`, `TestAutoUpdateStateHoldsNoErrorText` (after a can't-check run, state.json contains no error substring).
 - [ ] **Step 2: Run** `go test ./internal/app/ -run AutoUpdate` — Expected: FAIL.
 - [ ] **Step 3: Refactor** `Update` into `updateRef`; run `go test ./internal/app/` — Expected: existing tests PASS.
 - [ ] **Step 4: Implement** `AutoUpdate`.
@@ -226,6 +227,6 @@ CLI:
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** `go test ./internal/cli/` — Expected: PASS.
 - [ ] **Step 5: e2e**: in `test/e2e/e2e.sh` add a section after the existing update checks: install an e2e ref on `dev` with `--auto-update`; assert `/etc/systemd/system/ship-auto-update.timer` exists and `systemctl is-enabled ship-auto-update.timer` is `enabled`; publish a new dev build; run `ship update --auto`; `assert_running` the new version; `st` shows `auto_update == true`. Add `ship-auto-update.{service,timer}` to `cleanup` (disable --now, remove, daemon-reload) and to `preflight`'s must-not-exist list. Run `shellcheck -S warning test/e2e/e2e.sh` locally; the e2e itself runs in CI.
-- [ ] **Step 6: Docs**: README — add `--auto-update` to the `install`/`update` lines and `ship update --auto` to Commands; new section "Automatic updates" (opt-in, moving channels only, the timer and changing its interval with `systemctl edit ship-auto-update.timer`, skip and how a manual update clears it, the five messages, `[notify] url` / `SHIP_NOTIFY_URL` with a Telegram example, journal: `journalctl -u ship-auto-update`). Main design spec: a short "Automatic updates" section pointing to `2026-11-15-auto-update-design.md`.
+- [ ] **Step 6: Docs**: README — add `--auto-update` to the `install`/`update` lines and `ship update --auto` to Commands; new section "Automatic updates" (opt-in, moving channels only, the timer and changing its interval with `systemctl edit ship-auto-update.timer`, a failed update or a manual rollback stops auto-update (`stopped` in status) and `--auto-update` turns it back on, the five messages, `[notify] url` / `SHIP_NOTIFY_URL` with a Telegram example, journal: `journalctl -u ship-auto-update`). Main design spec: a short "Automatic updates" section pointing to `2026-11-15-auto-update-design.md`.
 - [ ] **Step 7: Run** `make lint cover` — Expected: PASS, coverage ≥ 90%.
 - [ ] **Step 8: Commit** `feat(cli): --auto-update and update --auto; docs and e2e`
