@@ -77,6 +77,16 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 		channel = rs.Channel
 	}
 
+	// toggled names an explicit --auto-update that changes the setting;
+	// it is announced once the change is saved (and the timer is up).
+	toggled := ""
+	if args.AutoUpdate != nil && *args.AutoUpdate != rs.AutoUpdate {
+		toggled = "off"
+		if *args.AutoUpdate {
+			toggled = "on"
+		}
+	}
+
 	st, err := a.NewStore()
 	if err != nil {
 		return err
@@ -111,13 +121,20 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 				return err
 			}
 		}
+		var errs []error
 		if enabling {
 			if err := a.enableAutoUpdate(ctx); err != nil {
-				return err
+				errs = append(errs, err)
 			}
 		}
 		fmt.Fprintf(a.Out, "%s: already on %s\n", rs.Unit, rs.Version)
-		return nil
+		// The setting is saved: announce it even if the timer failed, or a
+		// rerun (which finds it already on) would never announce it.
+		if toggled != "" {
+			unlock()
+			a.announceAutoUpdate(ctx, rs.Unit, rs.Channel, toggled)
+		}
+		return errors.Join(errs...)
 	}
 
 	old := rs.PrevVersion
@@ -147,6 +164,10 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 	}
 	if outcome == swapped {
 		fmt.Fprintf(a.Out, "%s: %s -> %s%s\n", rs.Unit, old, rs.Version, republished(old, rs))
+	}
+	if toggled != "" {
+		unlock()
+		a.announceAutoUpdate(ctx, rs.Unit, rs.Channel, toggled)
 	}
 	if args.PurgeCache {
 		if err := a.purgeCache(ctx, zone); err != nil {
@@ -305,6 +326,8 @@ func (a *App) Rollback(ctx context.Context, refArg, serviceArg string) error {
 	fmt.Fprintf(a.Out, "%s: %s -> %s%s\n", rs.Unit, old, rs.Version, republished(old, rs))
 	if wasAuto {
 		fmt.Fprintf(a.Out, "%s: auto-update stopped; turn it back on with: ship update %s --service %s --auto-update\n", rs.Unit, ref, service)
+		unlock()
+		a.notifyAutoUpdate(ctx, rs.Unit, rs.Channel, "stopped", "a manual rollback")
 	}
 	return nil
 }

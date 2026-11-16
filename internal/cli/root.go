@@ -37,6 +37,7 @@ func NewRoot(out, errOut io.Writer) *cobra.Command {
 	root.AddCommand(newRunCmd())
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newSelfUpdateCmd())
+	root.AddCommand(newNotifyCmd())
 	hidePowerShell(root)
 	return root
 }

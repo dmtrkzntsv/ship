@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/dmtrkzntsv/ship/internal/cloudflare"
@@ -55,10 +56,16 @@ const interactiveLockWait = 2 * time.Minute
 // LockState takes the state lock for an interactive command, waiting up to
 // LockWait for another ship run to finish (saying so once on Err).
 // ship update --auto never waits: it uses State.Lock.
+// The returned unlock may be called more than once, so a command can release
+// the lock early (before a notification) and still defer it.
 func (a *App) LockState(ctx context.Context) (unlock func(), err error) {
-	return a.State.LockWait(ctx, a.LockWait, func() {
+	unlock, err = a.State.LockWait(ctx, a.LockWait, func() {
 		fmt.Fprintln(a.Err, "waiting for another ship run to finish\u2026")
 	})
+	if err != nil {
+		return nil, err
+	}
+	return sync.OnceFunc(unlock), nil
 }
 
 // locateShip is the ship path the auto-update unit runs: the "ship" found on
