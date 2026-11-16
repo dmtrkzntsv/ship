@@ -34,6 +34,11 @@ type App struct {
 	// ShipPath returns the absolute path of the running ship binary, which
 	// the auto-update service unit executes.
 	ShipPath func() (string, error)
+	// Notifier builds the notifier for ship update --auto; with no notify
+	// URL configured it is a no-op.
+	Notifier func() (Notifier, error)
+	// RunClockPath is the file holding the auto-update run failure clock.
+	RunClockPath string
 }
 
 // New loads the configuration (a missing file is fine; env-only is valid),
@@ -54,8 +59,9 @@ func New(out, errOut io.Writer) (*App, error) {
 			Paths: host.Paths{}, Sys: host.NewSys(), Out: out,
 			HealthWait: 10 * time.Second, HealthTick: time.Second,
 		},
-		Arch: release.HostArch(),
-		Now:  time.Now,
+		Arch:         release.HostArch(),
+		Now:          time.Now,
+		RunClockPath: runClockPath,
 		ShipPath: func() (string, error) {
 			p, err := os.Executable()
 			if err != nil {
@@ -67,6 +73,7 @@ func New(out, errOut io.Writer) (*App, error) {
 			return &cloudflare.Client{Token: token, HTTP: &http.Client{Timeout: 30 * time.Second}}
 		},
 	}
+	a.Notifier = func() (Notifier, error) { return configNotifier(a.Cfg.Notify.URL) }
 	a.NewStore = func() (store.Store, error) {
 		if err := a.Cfg.R2.Validate(); err != nil {
 			return nil, err
