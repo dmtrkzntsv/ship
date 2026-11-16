@@ -6,3 +6,6 @@ bucket = "ship"
 
 [cloudflare]
 api_token = "…"     # Zone > Cache Purge on every zone you purge
+
+[notify]
+url = ""   # automatic update notifications, e.g. telegram://<token>@telegram?chats=<chat_id>

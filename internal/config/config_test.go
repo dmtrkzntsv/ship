@@ -141,3 +141,19 @@ func TestReadErrorIsError(t *testing.T) {
 	_, _, _, err := Load(env(nil), []string{dir, next})
 	assert.ErrorContains(t, err, "read "+dir)
 }
+
+func TestLoadNotifyURLFromFile(t *testing.T) {
+	dir := t.TempDir()
+	p := writeFile(t, dir, "c.toml", "[notify]\nurl = \"ntfy://ntfy.sh/x\"\n", 0o600)
+	cfg, _, _, err := Load(env(nil), []string{p})
+	require.NoError(t, err)
+	assert.Equal(t, "ntfy://ntfy.sh/x", cfg.Notify.URL)
+}
+
+func TestLoadNotifyURLEnvOverrides(t *testing.T) {
+	dir := t.TempDir()
+	p := writeFile(t, dir, "c.toml", "[notify]\nurl = \"ntfy://ntfy.sh/x\"\n", 0o600)
+	cfg, _, _, err := Load(env(map[string]string{"SHIP_NOTIFY_URL": "telegram://t:k@telegram?chats=1"}), []string{p})
+	require.NoError(t, err)
+	assert.Equal(t, "telegram://t:k@telegram?chats=1", cfg.Notify.URL)
+}
