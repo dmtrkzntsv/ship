@@ -47,6 +47,7 @@ func TestInstallAutoUpdateShipPathProblems(t *testing.T) {
 
 	e.app.ShipPath = func() (string, error) { return "", assert.AnError }
 	require.ErrorIs(t, e.app.Install(context.Background(), app.InstallArgs{Ref: "econumo", Version: "dev", AutoUpdate: true}), assert.AnError)
+	assert.Empty(t, files(t, e.root))
 
 	e.app.ShipPath = nil
 	require.Error(t, e.app.Install(context.Background(), app.InstallArgs{Ref: "econumo", Version: "dev", AutoUpdate: true}))
@@ -61,6 +62,16 @@ func TestUpdateAutoUpdateTimerFailureKeepsFlag(t *testing.T) {
 	err := e.app.Update(ctx, app.UpdateArgs{Ref: "econumo", Service: "econumo-beta", AutoUpdate: ptr(true)})
 	require.ErrorIs(t, err, assert.AnError)
 	assert.True(t, e.state(t).Services["econumo-beta"].Refs["econumo"].AutoUpdate)
+}
+
+func TestUpdateAutoUpdateTimerFailureAfterRealUpdate(t *testing.T) {
+	e := installedEnv(t)
+	e.sys.EnableErr = assert.AnError
+	err := e.app.Update(context.Background(), app.UpdateArgs{Ref: "econumo", Service: "econumo-beta", AutoUpdate: ptr(true)})
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Contains(t, err.Error(), "update of econumo-beta succeeded but turning on auto-update failed (rerun with --auto-update)")
+	assert.Equal(t, "econumo-beta: 1.4.0 -> 1.5.0\n", e.out.String())
+	assert.Equal(t, "1.5.0", e.state(t).Services["econumo-beta"].Refs["econumo"].Version)
 }
 
 func TestUpdateTurnsAutoUpdateOnAndOff(t *testing.T) {

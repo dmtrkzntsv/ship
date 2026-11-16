@@ -144,12 +144,16 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 	if err := a.State.Save(s); err != nil {
 		return err
 	}
+	var timerErr error
 	if enabling {
 		if err := a.enableAutoUpdate(ctx); err != nil {
-			return err
+			timerErr = fmt.Errorf("update of %s succeeded but turning on auto-update failed (rerun with --auto-update): %w", rs.Unit, err)
 		}
 	}
 	fmt.Fprintf(a.Out, "%s: %s -> %s%s\n", rs.Unit, old, rs.Version, republished(old, rs))
+	if timerErr != nil {
+		return timerErr
+	}
 	if args.PurgeCache {
 		if err := a.purgeCache(ctx, zone); err != nil {
 			return fmt.Errorf("update of %s succeeded (not rolled back) but the cache purge failed: %w", rs.Unit, err)
@@ -190,10 +194,11 @@ func (a *App) Rollback(ctx context.Context, refArg, serviceArg string) error {
 	old := rs.Version
 	rs.Version, rs.PrevVersion = rs.PrevVersion, old
 	rs.PublishedAt, rs.PrevPublishedAt = rs.PrevPublishedAt, rs.PublishedAt
-	rs.InstalledAt = a.Now().UTC()
+	now := a.Now().UTC()
+	rs.InstalledAt = now
 	wasAuto := rs.AutoUpdate
 	if wasAuto {
-		stopAutoUpdate(rs, a.Now().UTC())
+		stopAutoUpdate(rs, now)
 	}
 	if err := a.State.Save(s); err != nil {
 		return err

@@ -112,16 +112,17 @@ func (a *App) Install(ctx context.Context, args InstallArgs) error {
 	if err := a.State.Save(s); err != nil {
 		return err
 	}
+	var timerErr error
 	if args.AutoUpdate {
 		if err := a.enableAutoUpdate(ctx); err != nil {
-			return err
+			timerErr = fmt.Errorf("install of %s succeeded but turning on auto-update failed (rerun with: ship update %s --service %s --auto-update): %w", unit, ref, service, err)
 		}
 	}
 
 	ph := a.Host.Paths.Placeholders(service, ref, unit)
 	fmt.Fprintf(a.Out, "installed %s %s into service %s as %s.service (enabled, not started)\n", ref, f.Release.Version, service, unit)
 	fmt.Fprintf(a.Out, "next: edit %s, then run: ship start %s --service %s\n", ph.EnvFile, ref, service)
-	return nil
+	return timerErr
 }
 
 // checkNewServiceName validates a service name given to install.
