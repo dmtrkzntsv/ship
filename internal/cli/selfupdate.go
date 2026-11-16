@@ -38,13 +38,17 @@ func newSelfUpdateCmd() *cobra.Command {
 					return err
 				}
 			}
-			// Held from before the binary is replaced through the state
-			// save, so no ship run (the auto-update timer) runs in between.
-			unlock, err := a.LockState(cmd.Context())
-			if err != nil {
-				return err
+			// On a host (root on Linux, where the auto-update timer may run)
+			// the lock is held from before the binary is replaced through
+			// the state save. Elsewhere only remembering a channel locks.
+			locked := runningAsRoot()
+			if locked {
+				unlock, err := a.LockState(cmd.Context())
+				if err != nil {
+					return err
+				}
+				defer unlock()
 			}
-			defer unlock()
 			channel := version
 			if channel == "" {
 				channel = "latest"
@@ -66,6 +70,13 @@ func newSelfUpdateCmd() *cobra.Command {
 			if version == "" {
 				return nil
 			}
+			if !locked {
+				unlock, err := a.LockState(cmd.Context())
+				if err != nil {
+					return fmt.Errorf("updated, but could not remember channel %q: %w", channel, err)
+				}
+				defer unlock()
+			}
 			st, err := a.State.Load()
 			if err != nil {
 				return err
@@ -80,6 +91,10 @@ func newSelfUpdateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&version, "version", "", "channel to update to and remember: a version or a moving channel (latest, dev, edge, ...) (default: the remembered channel, else latest)")
 	return cmd
 }
+
+// runningAsRoot reports whether ship runs as root; tests replace it. The
+// command is Linux only, so root means a host ship manages.
+var runningAsRoot = func() bool { return os.Geteuid() == 0 }
 
 // executable is the path of the running binary; tests replace it so
 // self-update rewrites a temp file instead of the test binary.
