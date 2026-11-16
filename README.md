@@ -261,7 +261,9 @@ Every message starts with the host name. There are six kinds:
 
 - updated: `homelab: econumo (dev) 2026-11-15T10:02 → 2026-11-16T09:40`;
 - failed: `homelab: econumo (dev) build X failed, still on Y; auto-update stopped`,
-  with the error and the journal lines the health check collected;
+  with the error and the journal lines the health check collected. A checksum
+  mismatch while a publish is landing (`SHA256SUMS` changed during the
+  download) is not a failed build: the next run tries again;
 - down: `homelab: econumo is DOWN — update to X failed and rollback to Y failed;
   auto-update stopped`, with the journal lines;
 - not saved: `homelab: econumo (dev) updated to X but the state could not be
@@ -270,8 +272,9 @@ Every message starts with the host name. There are six kinds:
   pending in `/var/lib/ship/auto-update.json`. The next run, or a manual
   `ship update` of that ref, finds X installed as remembered and only records
   it (no restart, rollback target kept). While the state still cannot be
-  saved, later runs say so in the journal, not in another message. Without
-  such a record, an update always installs, restarts and health-checks;
+  saved, later runs update nothing: every run first checks that `state.json`
+  can be written, and otherwise counts as "can't run" (below). Without such a
+  record, an update always installs, restarts and health-checks;
 - can't check: `homelab: can't check econumo (dev) for updates since 14:02: <error>`,
   sent when R2 or the network has been failing for an hour, repeated every 24
   hours (`still can't check ...`), and followed by `... reachable again, was
