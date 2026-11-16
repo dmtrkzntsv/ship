@@ -70,6 +70,7 @@ func TestLockExclusive(t *testing.T) {
 
 	_, err = f.Lock()
 	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrLocked)
 	assert.Contains(t, err.Error(), "another ship run holds")
 	assert.Contains(t, err.Error(), filepath.Join(filepath.Dir(f.Path), "state.lock"))
 

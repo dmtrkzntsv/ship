@@ -47,7 +47,9 @@ func HostArch() string { return runtime.GOARCH }
 
 // Fetch downloads the files of ref's channel needed to install it for arch
 // into dir (which the caller owns) and verifies each against SHA256SUMS.
-// On any error every file written to dir by this call is removed.
+// On any error every file written to dir by this call is removed; once
+// release.json has been read and verified, the returned Fetched still carries
+// its Release, so callers can name the build that failed.
 func Fetch(ctx context.Context, st store.Store, ref layout.Ref, channel, arch, dir string) (_ Fetched, err error) {
 	prefix := ref.Project + "/" + channel + "/"
 
@@ -106,16 +108,16 @@ func Fetch(ctx context.Context, st store.Store, ref layout.Ref, channel, arch, d
 	}
 
 	if f.Binary, err = fetch(binName, 0o755); err != nil {
-		return Fetched{}, err
+		return Fetched{Release: f.Release}, err
 	}
 	if _, ok := sm[layout.UnitFile(asset)]; ok {
 		if f.Unit, err = fetch(layout.UnitFile(asset), 0o644); err != nil {
-			return Fetched{}, err
+			return Fetched{Release: f.Release}, err
 		}
 	}
 	if _, ok := sm[layout.EnvExampleFile(asset)]; ok {
 		if f.EnvExample, err = fetch(layout.EnvExampleFile(asset), 0o644); err != nil {
-			return Fetched{}, err
+			return Fetched{Release: f.Release}, err
 		}
 	}
 	return f, nil

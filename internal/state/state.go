@@ -52,6 +52,9 @@ type RefState struct {
 	CheckNotifiedAt   time.Time `json:"check_notified_at,omitzero"`
 }
 
+// ErrLocked marks a Lock refused because another ship process holds it.
+var ErrLocked = errors.New("another ship run holds")
+
 // File is a state file on disk; its lock file is state.lock in the same dir.
 type File struct{ Path string }
 
@@ -135,7 +138,7 @@ func (f File) Lock() (unlock func(), err error) {
 	if err := syscall.Flock(int(fd.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		fd.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, fmt.Errorf("another ship run holds %s", lp)
+			return nil, fmt.Errorf("%w %s", ErrLocked, lp)
 		}
 		return nil, fmt.Errorf("lock %s: %w", lp, err)
 	}

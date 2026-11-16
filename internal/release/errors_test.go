@@ -232,6 +232,20 @@ func TestFetchBadBuildErrors(t *testing.T) {
 	}
 }
 
+func TestFetchFailureKeepsRelease(t *testing.T) {
+	st := publishFixture(t, "econumo", "econumo-linux-amd64", "econumo-linux-arm64", "econumo.service")
+	want := st.Objects["econumo/latest/release.json"]
+	o := st.Objects["econumo/latest/econumo-linux-amd64"]
+	o.Data = append([]byte("x"), o.Data...)
+	st.Objects["econumo/latest/econumo-linux-amd64"] = o
+
+	f, err := release.Fetch(context.Background(), st, layout.Ref{Project: "econumo"}, "latest", "amd64", t.TempDir())
+	require.ErrorIs(t, err, release.ErrBadBuild)
+	assert.NotEmpty(t, f.Release.Version)
+	assert.Contains(t, string(want.Data), f.Release.Version)
+	assert.Empty(t, f.Binary)
+}
+
 func TestFetchChannelNotFoundIsNotBadBuild(t *testing.T) {
 	st := publishFixture(t, "econumo", "econumo-linux-amd64", "econumo-linux-arm64")
 	_, err := release.Fetch(context.Background(), st, layout.Ref{Project: "econumo"}, "v9", "amd64", t.TempDir())
