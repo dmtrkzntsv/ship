@@ -87,6 +87,22 @@ func (f *FakeSys) IsActive(_ context.Context, unit string) bool {
 	return f.Active[unit]
 }
 
+// ActiveState is "active" or "inactive", read like IsActive; a Fail entry
+// for "ActiveState <unit>" makes it fail.
+func (f *FakeSys) ActiveState(_ context.Context, unit string) (string, error) {
+	if err := f.record("ActiveState %s", unit); err != nil {
+		return "", err
+	}
+	active := f.Active[unit]
+	if f.ActiveAfterRestart != nil {
+		active = f.ActiveAfterRestart(unit)
+	}
+	if active {
+		return "active", nil
+	}
+	return "inactive", nil
+}
+
 func (f *FakeSys) JournalTail(_ context.Context, unit string, n int) string {
 	_ = f.record("JournalTail %s %d", unit, n)
 	return f.Journal

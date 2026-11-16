@@ -50,6 +50,24 @@ func (linuxSys) IsActive(ctx context.Context, unit string) bool {
 	return exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", unit).Run() == nil
 }
 
+func (linuxSys) ActiveState(ctx context.Context, unit string) (string, error) {
+	args := []string{"show", "-p", "ActiveState", "--value", unit}
+	out, err := exec.CommandContext(ctx, "systemctl", args...).Output()
+	if err != nil {
+		if ctx.Err() != nil && !errors.Is(err, ctx.Err()) {
+			err = fmt.Errorf("%w (%w)", err, ctx.Err())
+		}
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			if msg := strings.TrimSpace(string(ee.Stderr)); msg != "" {
+				return "", fmt.Errorf("systemctl %s: %w: %s", strings.Join(args, " "), err, msg)
+			}
+		}
+		return "", fmt.Errorf("systemctl %s: %w", strings.Join(args, " "), err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 func (linuxSys) JournalTail(ctx context.Context, unit string, n int) string {
 	out, _ := exec.CommandContext(ctx, "journalctl", "-u", unit, "-n", strconv.Itoa(n), "--no-pager").CombinedOutput()
 	return string(out)

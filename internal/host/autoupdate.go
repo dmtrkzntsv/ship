@@ -6,11 +6,31 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/dmtrkzntsv/ship/internal/layout"
 )
+
+// hasLine reports whether data holds line as one whole line.
+func hasLine(data []byte, line string) bool {
+	for _, l := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(l) == line {
+			return true
+		}
+	}
+	return false
+}
 
 // AutoUpdateUnit names the systemd service and timer that run
 // `ship update --auto` on a schedule.
-const AutoUpdateUnit = "ship-auto-update"
+const AutoUpdateUnit = layout.AutoUpdateUnit
+
+// The Description lines mark the units as ship's: a file at either path
+// without its line belongs to someone else and is never overwritten.
+const (
+	autoUpdateServiceMark = "Description=ship automatic updates"
+	autoUpdateTimerMark   = "Description=Run ship automatic updates every 5 minutes"
+)
 
 const autoUpdateTimer = `[Unit]
 Description=Run ship automatic updates every 5 minutes
@@ -38,19 +58,25 @@ ExecStart=%s update --auto
 }
 
 // EnsureAutoUpdateTimer writes the auto-update service and timer units for
-// the ship binary at shipPath, then daemon-reloads (only when a unit changed)
-// and enables and starts the timer. Running it again with the same content
-// does no reload.
+// the ship binary at shipPath, then daemon-reloads and enables and starts
+// the timer. It always reloads, so a reload that failed on an earlier call
+// is retried even when the files are already in place. A file at either
+// path that is not ship's is refused before anything is written.
 func (h *Host) EnsureAutoUpdateTimer(ctx context.Context, shipPath string) error {
 	p := h.Paths
 	units := []struct {
-		path string
-		data []byte
+		path, mark string
+		data       []byte
 	}{
-		{p.UnitPath(AutoUpdateUnit), autoUpdateService(shipPath)},
-		{p.TimerPath(AutoUpdateUnit), []byte(autoUpdateTimer)},
+		{p.UnitPath(AutoUpdateUnit), autoUpdateServiceMark, autoUpdateService(shipPath)},
+		{p.TimerPath(AutoUpdateUnit), autoUpdateTimerMark, []byte(autoUpdateTimer)},
 	}
-	changed := false
+	for _, u := range units {
+		cur, err := os.ReadFile(u.path)
+		if err == nil && !hasLine(cur, u.mark) {
+			return fmt.Errorf("%s exists and is not ship's auto-update unit; remove it first", u.path)
+		}
+	}
 	for _, u := range units {
 		if cur, err := os.ReadFile(u.path); err == nil && bytes.Equal(cur, u.data) {
 			continue
@@ -61,12 +87,9 @@ func (h *Host) EnsureAutoUpdateTimer(ctx context.Context, shipPath string) error
 		if err := writeFileAtomic(u.path, u.data, 0o644); err != nil {
 			return err
 		}
-		changed = true
 	}
-	if changed {
-		if err := h.Sys.DaemonReload(ctx); err != nil {
-			return fmt.Errorf("daemon-reload: %w", err)
-		}
+	if err := h.Sys.DaemonReload(ctx); err != nil {
+		return fmt.Errorf("daemon-reload: %w", err)
 	}
 	timer := AutoUpdateUnit + ".timer"
 	if err := h.Sys.Systemctl(ctx, "enable", "--now", timer); err != nil {

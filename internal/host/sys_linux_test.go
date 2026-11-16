@@ -116,6 +116,26 @@ func TestLinuxSysInterruptedCommandIsCanceled(t *testing.T) {
 	assert.Contains(t, err.Error(), "systemctl restart tw: ")
 }
 
+func TestLinuxSysActiveState(t *testing.T) {
+	calls := stubTools(t, "0", "Warning: unit file changed on disk")
+	// systemctl prints the value on stdout; stderr noise is not part of it.
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "systemctl"),
+		[]byte("#!/bin/sh\necho \"systemctl $*\" >> \"$STUB_LOG\"\necho inactive\nprintf '%s' \"$STUB_OUT\" >&2\nexit ${STUB_EXIT:-0}\n"), 0o755))
+	t.Setenv("PATH", dir)
+	got, err := host.NewSys().ActiveState(context.Background(), "tw")
+	require.NoError(t, err)
+	assert.Equal(t, "inactive", got)
+	assert.Equal(t, []string{"systemctl show -p ActiveState --value tw"}, calls())
+
+	t.Setenv("STUB_EXIT", "1")
+	t.Setenv("STUB_OUT", "Failed to connect to bus")
+	_, err = host.NewSys().ActiveState(context.Background(), "tw")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "systemctl show -p ActiveState --value tw: exit status 1")
+	assert.Contains(t, err.Error(), "Failed to connect to bus")
+}
+
 func TestLinuxSysIsActive(t *testing.T) {
 	calls := stubTools(t, "0", "")
 	assert.True(t, host.NewSys().IsActive(context.Background(), "tw"))

@@ -3,6 +3,7 @@ package host_test
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -61,7 +62,37 @@ func TestEnsureAutoUpdateTimerIdempotent(t *testing.T) {
 	fs.Calls = nil
 
 	require.NoError(t, h.EnsureAutoUpdateTimer(ctx, "/usr/local/bin/ship"))
-	assert.Equal(t, []string{"systemctl enable --now ship-auto-update.timer"}, fs.Calls)
+	assert.Equal(t, []string{"DaemonReload", "systemctl enable --now ship-auto-update.timer"}, fs.Calls,
+		"always reloads, so a reload that failed last time is retried")
+}
+
+func TestEnsureAutoUpdateTimerRefusesForeignUnits(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		path func(h *host.Host) string
+		kind string
+	}{
+		{"service", func(h *host.Host) string { return h.Paths.UnitPath(host.AutoUpdateUnit) }, ".service"},
+		{"timer", func(h *host.Host) string { return h.Paths.TimerPath(host.AutoUpdateUnit) }, ".timer"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h, fs := newHost(t)
+			p := c.path(h)
+			require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+			require.NoError(t, os.WriteFile(p, []byte("[Unit]\nDescription=my own thing\n"), 0o644))
+			err := h.EnsureAutoUpdateTimer(context.Background(), "/usr/local/bin/ship")
+			require.EqualError(t, err, p+" exists and is not ship's auto-update unit; remove it first")
+			assert.Empty(t, fs.Calls)
+			assert.Equal(t, "[Unit]\nDescription=my own thing\n", read(t, p))
+		})
+	}
+	// ship's own units from an older ship (another ExecStart) are rewritten.
+	h, _ := newHost(t)
+	svc := h.Paths.UnitPath(host.AutoUpdateUnit)
+	require.NoError(t, os.MkdirAll(filepath.Dir(svc), 0o755))
+	require.NoError(t, os.WriteFile(svc, []byte("[Unit]\nDescription=ship automatic updates\n[Service]\nExecStart=/old/ship update --auto\n"), 0o644))
+	require.NoError(t, h.EnsureAutoUpdateTimer(context.Background(), "/usr/local/bin/ship"))
+	assert.Equal(t, autoUpdateServiceWant, read(t, svc))
 }
 
 func TestEnsureAutoUpdateTimerRewritesChangedPath(t *testing.T) {

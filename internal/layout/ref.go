@@ -23,7 +23,12 @@ var reservedServices = map[string]bool{
 	"nobody": true, "daemon": true, "bin": true, "sys": true, "etc": true, "opt": true,
 	"var": true, "usr": true, "home": true, "tmp": true, "run": true, "proc": true,
 	"dev": true, "boot": true, "lib": true,
+	AutoUpdateUnit: true,
 }
+
+// AutoUpdateUnit names ship's own systemd service and timer that run
+// `ship update --auto`; no service or unit of a ref may take it.
+const AutoUpdateUnit = "ship-auto-update"
 
 // ReservedService reports whether name may not be used as a service name.
 func ReservedService(name string) bool { return reservedServices[name] }
