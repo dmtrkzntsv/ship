@@ -11,8 +11,11 @@ import (
 	"github.com/dmtrkzntsv/ship/internal/config"
 )
 
-// isRoot reports whether ship runs as root; a variable so tests can pretend.
-var isRoot = func() bool { return os.Geteuid() == 0 }
+// isRoot and getenv are variables so tests can pretend.
+var (
+	isRoot = func() bool { return os.Geteuid() == 0 }
+	getenv = os.Getenv
+)
 
 func newNotifyCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -28,6 +31,9 @@ func newNotifyCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if getenv("SHIP_NOTIFY_URL") != "" {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: SHIP_NOTIFY_URL is set in this shell and was tested instead of %s; the auto-update timer reads only that file\n", config.SystemPath)
+			}
 			err = a.NotifyTest(cmd.Context())
 			if !isRoot() {
 				// The host config is root-only and silently skipped otherwise;
@@ -35,7 +41,7 @@ func newNotifyCmd() *cobra.Command {
 				if errors.Is(err, app.ErrNoNotifyURL) {
 					return fmt.Errorf("%w; %s is readable only by root, try: sudo ship notify test", err, config.SystemPath)
 				}
-				fmt.Fprintf(cmd.ErrOrStderr(), "note: not root, so this tested your own settings; the auto-update timer reads only %s (try: sudo ship notify test)\n", config.SystemPath)
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: not root, so this tested the settings readable as you; the auto-update timer runs as root and reads only %s (try: sudo ship notify test)\n", config.SystemPath)
 			}
 			return err
 		},

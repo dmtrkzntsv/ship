@@ -102,7 +102,8 @@ about automatic updates: manual commands never notify (the operator is there).
 notifies too (`auto-update on|off for <unit> (<channel>)`, and `stopped …
 after a manual rollback`), so every host's auto-update state is visible in the
 channel and turning it on doubles as a test; `ship notify test` sends a test
-message on demand.
+message on demand. These operator-side sends happen after the change is saved and
+the state lock released, survive an interrupt, and only warn when they fail.
 
 **Configuration.** One optional URL, `[notify] url = "…"` in the config file
 or `SHIP_NOTIFY_URL`, in shoutrrr's URL format (`telegram://`, `ntfy://`,

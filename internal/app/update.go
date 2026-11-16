@@ -131,7 +131,8 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 		// The setting is saved: announce it even if the timer failed, or a
 		// rerun (which finds it already on) would never announce it.
 		if toggled != "" {
-			errs = append(errs, a.announceAutoUpdate(ctx, rs.Unit, rs.Channel, toggled))
+			unlock()
+			a.announceAutoUpdate(ctx, rs.Unit, rs.Channel, toggled)
 		}
 		return errors.Join(errs...)
 	}
@@ -165,9 +166,8 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 		fmt.Fprintf(a.Out, "%s: %s -> %s%s\n", rs.Unit, old, rs.Version, republished(old, rs))
 	}
 	if toggled != "" {
-		if err := a.announceAutoUpdate(ctx, rs.Unit, rs.Channel, toggled); err != nil {
-			errs = append(errs, err)
-		}
+		unlock()
+		a.announceAutoUpdate(ctx, rs.Unit, rs.Channel, toggled)
 	}
 	if args.PurgeCache {
 		if err := a.purgeCache(ctx, zone); err != nil {
@@ -326,7 +326,8 @@ func (a *App) Rollback(ctx context.Context, refArg, serviceArg string) error {
 	fmt.Fprintf(a.Out, "%s: %s -> %s%s\n", rs.Unit, old, rs.Version, republished(old, rs))
 	if wasAuto {
 		fmt.Fprintf(a.Out, "%s: auto-update stopped; turn it back on with: ship update %s --service %s --auto-update\n", rs.Unit, ref, service)
-		return a.notifyAutoUpdate(ctx, rs.Unit, rs.Channel, "stopped", "a manual rollback")
+		unlock()
+		a.notifyAutoUpdate(ctx, rs.Unit, rs.Channel, "stopped", "a manual rollback")
 	}
 	return nil
 }

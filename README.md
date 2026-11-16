@@ -261,8 +261,9 @@ url = "telegram://<bot_token>@telegram?chats=<chat_id>"
 
 Check it with `sudo ship notify test`, which sends `homelab: test notification
 from ship` the way automatic runs do and prints the error if it fails. Run it
-as root: the timer reads only `/etc/ship/config.toml`, and without root the
-test uses your own settings instead (it says so).
+as root: the timer reads only `/etc/ship/config.toml`, while the test also
+picks up `SHIP_NOTIFY_URL` from your shell and, without root, other settings
+readable as you; it warns in both cases.
 
 Every message starts with the host name. There are seven kinds:
 
@@ -271,8 +272,9 @@ Every message starts with the host name. There are seven kinds:
   when the setting changes, and `homelab: auto-update stopped for econumo-beta
   (dev) after a manual rollback`. The command also prints `<unit>: auto-update
   on|off`. The change is announced once it is saved, even if starting the
-  timer then fails. The setting is saved even when the send fails; the command
-  then exits non-zero with `notification not sent: <error>`;
+  timer then fails or the command is interrupted. A failed send only prints
+  `warning: notification not sent: <error>`: the change stands and the command
+  still succeeds (retrying a rollback would roll forward again);
 
 - updated: `homelab: econumo (dev) 2026-11-15T10:02 → 2026-11-16T09:40`;
 - failed: `homelab: econumo (dev) build X failed, still on Y; auto-update stopped`,

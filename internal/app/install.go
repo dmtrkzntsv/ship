@@ -124,7 +124,8 @@ func (a *App) Install(ctx context.Context, args InstallArgs) error {
 	fmt.Fprintf(a.Out, "next: edit %s, then run: ship start %s --service %s\n", ph.EnvFile, ref, service)
 	if args.AutoUpdate {
 		// Saved as on even if the timer failed, so announce it either way.
-		return errors.Join(timerErr, a.announceAutoUpdate(ctx, unit, args.Version, "on"))
+		unlock()
+		a.announceAutoUpdate(ctx, unit, args.Version, "on")
 	}
 	return timerErr
 }

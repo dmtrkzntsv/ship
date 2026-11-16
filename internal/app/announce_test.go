@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -83,26 +84,64 @@ func TestRollbackStopAnnounced(t *testing.T) {
 	assert.Equal(t, []string{"auto-update stopped for econumo-beta (dev) after a manual rollback"}, n.titles())
 }
 
-func TestToggleNotifyFailureKeepsSetting(t *testing.T) {
+func TestToggleNotifyFailureOnlyWarns(t *testing.T) {
 	e := installedEnv(t)
 	n := withNotifier(e)
 	n.err = errors.New("chat not found")
-	err := e.app.Update(context.Background(), app.UpdateArgs{Ref: "econumo", Service: "econumo-beta", AutoUpdate: ptr(true)})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "notification not sent: chat not found")
+	require.NoError(t, e.app.Update(context.Background(), app.UpdateArgs{Ref: "econumo", Service: "econumo-beta", AutoUpdate: ptr(true)}))
+	assert.Contains(t, e.app.Err.(*bytes.Buffer).String(), "warning: notification not sent: chat not found")
 	rs := e.state(t).Services["econumo-beta"].Refs["econumo"]
 	assert.True(t, rs.AutoUpdate, "the setting is saved even though the send failed")
 	assert.Equal(t, "1.5.0", rs.Version)
 }
 
-func TestToggleNotifierErrorReported(t *testing.T) {
+func TestToggleNotifierErrorOnlyWarns(t *testing.T) {
 	e := installedEnv(t)
 	withNotifier(e)
 	require.NoError(t, e.app.Update(context.Background(), app.UpdateArgs{Ref: "econumo", Service: "econumo-beta", AutoUpdate: ptr(true)}))
 	e.app.Notifier = func() (app.Notifier, error) { return nil, errors.New("bad url") }
-	err := e.app.Update(context.Background(), app.UpdateArgs{Ref: "econumo", Service: "econumo-beta", AutoUpdate: ptr(false)})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "notification not sent: bad url")
+	require.NoError(t, e.app.Update(context.Background(), app.UpdateArgs{Ref: "econumo", Service: "econumo-beta", AutoUpdate: ptr(false)}))
+	assert.Contains(t, e.app.Err.(*bytes.Buffer).String(), "warning: notification not sent: bad url")
+}
+
+// A rollback whose announcement fails still succeeds: a retry would roll
+// forward again.
+func TestRollbackNotifyFailureStillSucceeds(t *testing.T) {
+	e := installedEnv(t)
+	ctx := context.Background()
+	require.NoError(t, e.app.Update(ctx, app.UpdateArgs{Ref: "econumo", Service: "econumo-beta", AutoUpdate: ptr(true)}))
+	n := withNotifier(e)
+	n.err = errors.New("timeout")
+	require.NoError(t, e.app.Rollback(ctx, "econumo", "econumo-beta"))
+	assert.Equal(t, "1.4.0", e.state(t).Services["econumo-beta"].Refs["econumo"].Version)
+	assert.Contains(t, e.app.Err.(*bytes.Buffer).String(), "warning: notification not sent: timeout")
+}
+
+// Once the change is saved, an interrupt does not stop its announcement.
+func TestToggleAnnouncedAfterInterrupt(t *testing.T) {
+	e := installedEnv(t)
+	n := withNotifier(e)
+	ctx, cancel := context.WithCancel(context.Background())
+	e.app.Notifier = func() (app.Notifier, error) { cancel(); return n, nil }
+	require.NoError(t, e.app.Update(ctx, app.UpdateArgs{Ref: "econumo", Service: "econumo-beta", AutoUpdate: ptr(true)}))
+	require.Len(t, n.got, 1)
+	assert.Empty(t, e.app.Err.(*bytes.Buffer).String(), "the send used a context that the interrupt did not cancel")
+}
+
+// The announcement is sent after the state lock is released.
+func TestToggleSentWithoutStateLock(t *testing.T) {
+	e := installedEnv(t)
+	locked := true
+	e.app.Notifier = func() (app.Notifier, error) {
+		unlock, err := e.app.State.Lock()
+		if err == nil {
+			locked = false
+			unlock()
+		}
+		return &fakeNotifier{}, nil
+	}
+	require.NoError(t, e.app.Update(context.Background(), app.UpdateArgs{Ref: "econumo", Service: "econumo-beta", AutoUpdate: ptr(true)}))
+	assert.False(t, locked, "the state lock was still held while notifying")
 }
 
 func TestNotifyTest(t *testing.T) {
