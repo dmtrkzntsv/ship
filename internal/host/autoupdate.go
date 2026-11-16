@@ -3,6 +3,7 @@ package host
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,25 @@ import (
 
 	"github.com/dmtrkzntsv/ship/internal/layout"
 )
+
+// checkOwnUnit refuses path unless it is absent or a regular file holding
+// mark: a symlink (dangling or not), a directory or an unreadable entry is
+// someone else's.
+func checkOwnUnit(path, mark string) error {
+	fi, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	notOurs := fmt.Errorf("%s exists and is not ship's auto-update unit; remove it first", path)
+	if err != nil || !fi.Mode().IsRegular() {
+		return notOurs
+	}
+	cur, err := os.ReadFile(path)
+	if err != nil || !hasLine(cur, mark) {
+		return notOurs
+	}
+	return nil
+}
 
 // hasLine reports whether data holds line as one whole line.
 func hasLine(data []byte, line string) bool {
@@ -72,9 +92,8 @@ func (h *Host) EnsureAutoUpdateTimer(ctx context.Context, shipPath string) error
 		{p.TimerPath(AutoUpdateUnit), autoUpdateTimerMark, []byte(autoUpdateTimer)},
 	}
 	for _, u := range units {
-		cur, err := os.ReadFile(u.path)
-		if err == nil && !hasLine(cur, u.mark) {
-			return fmt.Errorf("%s exists and is not ship's auto-update unit; remove it first", u.path)
+		if err := checkOwnUnit(u.path, u.mark); err != nil {
+			return err
 		}
 	}
 	for _, u := range units {

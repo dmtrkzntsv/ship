@@ -86,6 +86,24 @@ func TestEnsureAutoUpdateTimerRefusesForeignUnits(t *testing.T) {
 			assert.Equal(t, "[Unit]\nDescription=my own thing\n", read(t, p))
 		})
 	}
+	// Anything but a regular file is refused too: a dangling symlink, a
+	// directory.
+	for name, make := range map[string]func(p string) error{
+		"dangling symlink": func(p string) error { return os.Symlink("/nonexistent/unit", p) },
+		"directory":        func(p string) error { return os.Mkdir(p, 0o755) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, fs := newHost(t)
+			p := h.Paths.TimerPath(host.AutoUpdateUnit)
+			require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+			require.NoError(t, make(p))
+			err := h.EnsureAutoUpdateTimer(context.Background(), "/usr/local/bin/ship")
+			require.EqualError(t, err, p+" exists and is not ship's auto-update unit; remove it first")
+			assert.Empty(t, fs.Calls)
+			_, err = os.Lstat(p)
+			require.NoError(t, err, "left in place")
+		})
+	}
 	// ship's own units from an older ship (another ExecStart) are rewritten.
 	h, _ := newHost(t)
 	svc := h.Paths.UnitPath(host.AutoUpdateUnit)
