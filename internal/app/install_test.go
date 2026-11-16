@@ -81,6 +81,7 @@ func newEnv(t *testing.T) *env {
 		Host:     &host.Host{Paths: host.Paths{Root: root}, Sys: sys, Out: out},
 		Arch:     "amd64",
 		Now:      func() time.Time { return fixedNow },
+		ShipPath: func() (string, error) { return "/usr/local/bin/ship", nil },
 	}
 	return &env{app: a, sys: sys, root: root, out: out, store: st}
 }

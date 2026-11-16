@@ -20,6 +20,8 @@ import (
 type UpdateArgs struct {
 	Ref, Service, Version, CFZone string
 	PurgeCache                    bool
+	// AutoUpdate turns auto-update on or off for the ref; nil leaves it as is.
+	AutoUpdate *bool
 }
 
 // Update fetches the ref's channel and swaps it in on the host with a
@@ -39,6 +41,13 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 	if args.PurgeCache {
 		// Fail before touching anything; checked again under the lock.
 		if err := a.checkPurge(service, args.CFZone); err != nil {
+			return err
+		}
+	}
+
+	enabling := args.AutoUpdate != nil && *args.AutoUpdate
+	if enabling {
+		if _, err := a.checkAutoUpdate(); err != nil {
 			return err
 		}
 	}
@@ -82,6 +91,17 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 	if f.Unit == "" {
 		return noUnitError{ref}
 	}
+	autoOn := rs.AutoUpdate
+	if args.AutoUpdate != nil {
+		autoOn = *args.AutoUpdate
+	}
+	if autoOn && !isMoving(channel, f.Release) {
+		hint := ""
+		if !enabling {
+			hint = "; pass --auto-update=false to pin it"
+		}
+		return notMovingError(rs.Unit, channel, hint)
+	}
 
 	// Re-installing the running release would only restart the unit and
 	// overwrite the rollback target with the same release. A channel-only
@@ -89,12 +109,18 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 	// must match too.
 	if f.Release.Version == rs.Version && f.Release.PublishedAt.Equal(rs.PublishedAt) {
 		svc := s.Services[service]
-		if rs.Channel != channel || (args.CFZone != "" && svc.CFZone != args.CFZone) {
+		if rs.Channel != channel || (args.CFZone != "" && svc.CFZone != args.CFZone) || args.AutoUpdate != nil {
 			rs.Channel = channel
 			if args.CFZone != "" {
 				svc.CFZone = args.CFZone
 			}
+			applyAutoUpdate(rs, args.AutoUpdate)
 			if err := a.State.Save(s); err != nil {
+				return err
+			}
+		}
+		if enabling {
+			if err := a.enableAutoUpdate(ctx); err != nil {
 				return err
 			}
 		}
@@ -110,12 +136,18 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 	rs.Channel, rs.PrevVersion, rs.Version = channel, old, f.Release.Version
 	rs.PrevPublishedAt, rs.PublishedAt = rs.PublishedAt, f.Release.PublishedAt
 	rs.InstalledAt = a.Now().UTC()
+	applyAutoUpdate(rs, args.AutoUpdate)
 	zone := s.Services[service].CFZone
 	if args.CFZone != "" {
 		s.Services[service].CFZone, zone = args.CFZone, args.CFZone
 	}
 	if err := a.State.Save(s); err != nil {
 		return err
+	}
+	if enabling {
+		if err := a.enableAutoUpdate(ctx); err != nil {
+			return err
+		}
 	}
 	fmt.Fprintf(a.Out, "%s: %s -> %s%s\n", rs.Unit, old, rs.Version, republished(old, rs))
 	if args.PurgeCache {
@@ -159,10 +191,17 @@ func (a *App) Rollback(ctx context.Context, refArg, serviceArg string) error {
 	rs.Version, rs.PrevVersion = rs.PrevVersion, old
 	rs.PublishedAt, rs.PrevPublishedAt = rs.PrevPublishedAt, rs.PublishedAt
 	rs.InstalledAt = a.Now().UTC()
+	wasAuto := rs.AutoUpdate
+	if wasAuto {
+		stopAutoUpdate(rs, a.Now().UTC())
+	}
 	if err := a.State.Save(s); err != nil {
 		return err
 	}
 	fmt.Fprintf(a.Out, "%s: %s -> %s%s\n", rs.Unit, old, rs.Version, republished(old, rs))
+	if wasAuto {
+		fmt.Fprintf(a.Out, "%s: auto-update stopped; turn it back on with: ship update %s --service %s --auto-update\n", rs.Unit, ref, service)
+	}
 	return nil
 }
 

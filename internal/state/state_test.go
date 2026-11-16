@@ -3,6 +3,7 @@ package state
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -203,4 +204,23 @@ func TestLockErrors(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "open lock "+filepath.Join(dir, "state.lock"))
 	})
+}
+
+func TestAutoUpdateFieldsRoundTripAndOmit(t *testing.T) {
+	f := File{Path: filepath.Join(t.TempDir(), "state.json")}
+	at := time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC)
+	s := &State{Services: map[string]*Service{"a": {Refs: map[string]*RefState{
+		"on":    {Unit: "a", AutoUpdate: true, CheckFailingSince: at, CheckNotifiedAt: at},
+		"stop":  {Unit: "b", AutoUpdateStoppedAt: at},
+		"plain": {Unit: "c"},
+	}}}}
+	require.NoError(t, f.Save(s))
+	got, err := f.Load()
+	require.NoError(t, err)
+	assert.Equal(t, s.Services["a"].Refs, got.Services["a"].Refs)
+
+	data, err := os.ReadFile(f.Path)
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(string(data), `"auto_update": true`))
+	assert.Equal(t, 1, strings.Count(string(data), `"auto_update_stopped_at"`))
 }

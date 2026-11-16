@@ -91,10 +91,10 @@ func TestStatusTable(t *testing.T) {
 	e := twoServices(t)
 	e.sys.Active = map[string]bool{"twillingate-sql": true}
 	require.NoError(t, e.app.Status(context.Background(), ""))
-	assert.Equal(t, `SERVICE       REF              UNIT             CHANNEL  VERSION  STATE
-econumo-beta  econumo          econumo-beta     dev      1.4.0    inactive
-twillingate   twillingate      twillingate      v2       v2       inactive
-twillingate   twillingate-sql  twillingate-sql  v5       v5       active
+	assert.Equal(t, `SERVICE       REF              UNIT             CHANNEL  VERSION  AUTO  STATE
+econumo-beta  econumo          econumo-beta     dev      1.4.0    -     inactive
+twillingate   twillingate      twillingate      v2       v2       -     inactive
+twillingate   twillingate-sql  twillingate-sql  v5       v5       -     active
 `, e.out.String())
 
 	e.out.Reset()
@@ -107,4 +107,18 @@ func TestStatusEmpty(t *testing.T) {
 	e := newEnv(t)
 	require.NoError(t, e.app.Status(context.Background(), ""))
 	assert.Equal(t, "no services installed\n", e.out.String())
+}
+
+func TestStatusShowsAuto(t *testing.T) {
+	e := twoServices(t)
+	s := e.state(t)
+	s.Services["econumo-beta"].Refs["econumo"].AutoUpdate = true
+	s.Services["twillingate"].Refs["twillingate"].AutoUpdateStoppedAt = fixedNow
+	require.NoError(t, e.app.State.Save(s))
+	require.NoError(t, e.app.Status(context.Background(), ""))
+	assert.Equal(t, `SERVICE       REF              UNIT             CHANNEL  VERSION  AUTO     STATE
+econumo-beta  econumo          econumo-beta     dev      1.4.0    on       inactive
+twillingate   twillingate      twillingate      v2       v2       stopped  inactive
+twillingate   twillingate-sql  twillingate-sql  v5       v5       -        inactive
+`, e.out.String())
 }

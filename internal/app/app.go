@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/dmtrkzntsv/ship/internal/cloudflare"
@@ -30,6 +31,9 @@ type App struct {
 	CF   func(token string) *cloudflare.Client
 	Arch string // linux arch of the binaries to install
 	Now  func() time.Time
+	// ShipPath returns the absolute path of the running ship binary, which
+	// the auto-update service unit executes.
+	ShipPath func() (string, error)
 }
 
 // New loads the configuration (a missing file is fine; env-only is valid),
@@ -52,6 +56,13 @@ func New(out, errOut io.Writer) (*App, error) {
 		},
 		Arch: release.HostArch(),
 		Now:  time.Now,
+		ShipPath: func() (string, error) {
+			p, err := os.Executable()
+			if err != nil {
+				return "", err
+			}
+			return filepath.EvalSymlinks(p)
+		},
 		CF: func(token string) *cloudflare.Client {
 			return &cloudflare.Client{Token: token, HTTP: &http.Client{Timeout: 30 * time.Second}}
 		},

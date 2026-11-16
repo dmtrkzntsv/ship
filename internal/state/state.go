@@ -40,6 +40,16 @@ type RefState struct {
 	PublishedAt     time.Time `json:"published_at,omitzero"`
 	PrevPublishedAt time.Time `json:"prev_published_at,omitzero"`
 	InstalledAt     time.Time `json:"installed_at"`
+
+	// AutoUpdate turns on `ship update --auto` for this ref.
+	AutoUpdate bool `json:"auto_update,omitempty"`
+	// AutoUpdateStoppedAt is when a failed automatic update or a manual
+	// rollback stopped auto-update on this ref.
+	AutoUpdateStoppedAt time.Time `json:"auto_update_stopped_at,omitzero"`
+	// CheckFailingSince and CheckNotifiedAt track a ref whose release can't
+	// be checked: since when, and when the last notification was sent.
+	CheckFailingSince time.Time `json:"check_failing_since,omitzero"`
+	CheckNotifiedAt   time.Time `json:"check_notified_at,omitzero"`
 }
 
 // File is a state file on disk; its lock file is state.lock in the same dir.

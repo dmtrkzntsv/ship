@@ -142,7 +142,7 @@ func (a *App) Status(ctx context.Context, service string) error {
 	}
 
 	tw := tabwriter.NewWriter(a.Out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "SERVICE\tREF\tUNIT\tCHANNEL\tVERSION\tSTATE")
+	fmt.Fprintln(tw, "SERVICE\tREF\tUNIT\tCHANNEL\tVERSION\tAUTO\tSTATE")
 	for _, n := range names {
 		refs := s.Services[n].Refs
 		keys := make([]string, 0, len(refs))
@@ -156,7 +156,13 @@ func (a *App) Status(ctx context.Context, service string) error {
 			if a.Host.Sys.IsActive(ctx, rs.Unit) {
 				st = "active"
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", n, k, rs.Unit, rs.Channel, rs.Version, st)
+			auto := "-"
+			if rs.AutoUpdate {
+				auto = "on"
+			} else if !rs.AutoUpdateStoppedAt.IsZero() {
+				auto = "stopped"
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", n, k, rs.Unit, rs.Channel, rs.Version, auto, st)
 		}
 	}
 	return tw.Flush()

@@ -15,7 +15,10 @@ import (
 // InstallArgs are the inputs of `ship install`. Service defaults to the
 // ref's project; Version is the channel to install (a version or a
 // moving channel).
-type InstallArgs struct{ Ref, Service, Version, CFZone string }
+type InstallArgs struct {
+	Ref, Service, Version, CFZone string
+	AutoUpdate                    bool
+}
 
 // Install downloads and verifies a release, lays it out on the host as a new
 // ref of the service (enabled, not started) and records it in state.
@@ -33,6 +36,12 @@ func (a *App) Install(ctx context.Context, args InstallArgs) error {
 	}
 	if err := validateChannel(args.Version); err != nil {
 		return err
+	}
+
+	if args.AutoUpdate {
+		if _, err := a.checkAutoUpdate(); err != nil {
+			return err
+		}
 	}
 
 	unlock, err := a.State.Lock()
@@ -79,6 +88,9 @@ func (a *App) Install(ctx context.Context, args InstallArgs) error {
 	if f.Unit == "" {
 		return noUnitError{ref}
 	}
+	if args.AutoUpdate && !isMoving(args.Version, f.Release) {
+		return notMovingError(unit, args.Version, "")
+	}
 
 	createsUser := !a.Host.Sys.UserExists(service)
 	if err := a.Host.Install(ctx, host.Target{Service: service, Ref: ref, Unit: unit, Fetched: f}); err != nil {
@@ -95,9 +107,15 @@ func (a *App) Install(ctx context.Context, args InstallArgs) error {
 	svc.Refs[ref.String()] = &state.RefState{
 		Unit: unit, Channel: args.Version, Version: f.Release.Version,
 		PublishedAt: f.Release.PublishedAt, InstalledAt: a.Now().UTC(),
+		AutoUpdate: args.AutoUpdate,
 	}
 	if err := a.State.Save(s); err != nil {
 		return err
+	}
+	if args.AutoUpdate {
+		if err := a.enableAutoUpdate(ctx); err != nil {
+			return err
+		}
 	}
 
 	ph := a.Host.Paths.Placeholders(service, ref, unit)
