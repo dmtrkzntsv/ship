@@ -10,6 +10,7 @@ import (
 	"github.com/dmtrkzntsv/ship/internal/layout"
 	"github.com/dmtrkzntsv/ship/internal/release"
 	"github.com/dmtrkzntsv/ship/internal/state"
+	"github.com/dmtrkzntsv/ship/internal/store"
 )
 
 // UpdateArgs are the inputs of `ship update`. Service defaults to the ref's
@@ -79,35 +80,25 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 	if err != nil {
 		return err
 	}
-	dir, err := os.MkdirTemp("", "ship-update-")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(dir)
-	f, err := release.Fetch(ctx, st, ref, channel, a.Arch, dir)
-	if err != nil {
-		return err
-	}
-	if f.Unit == "" {
-		return noUnitError{ref}
-	}
-	autoOn := rs.AutoUpdate
-	if args.AutoUpdate != nil {
-		autoOn = *args.AutoUpdate
-	}
-	if autoOn && !isMoving(channel, f.Release) {
-		hint := ""
-		if !enabling {
-			hint = "; pass --auto-update=false to pin it"
+	_, changed, err := a.updateRef(ctx, st, ref, service, rs, channel, func(rel release.Release) error {
+		autoOn := rs.AutoUpdate
+		if args.AutoUpdate != nil {
+			autoOn = *args.AutoUpdate
 		}
-		return notMovingError(rs.Unit, channel, hint)
+		if autoOn && !isMoving(channel, rel) {
+			hint := ""
+			if !enabling {
+				hint = "; pass --auto-update=false to pin it"
+			}
+			return notMovingError(rs.Unit, channel, hint)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
-	// Re-installing the running release would only restart the unit and
-	// overwrite the rollback target with the same release. A channel-only
-	// publish keeps the channel name as its version, so the publish time
-	// must match too.
-	if f.Release.Version == rs.Version && f.Release.PublishedAt.Equal(rs.PublishedAt) {
+	if !changed {
 		svc := s.Services[service]
 		if rs.Channel != channel || (args.CFZone != "" && svc.CFZone != args.CFZone) || args.AutoUpdate != nil {
 			rs.Channel = channel
@@ -128,14 +119,7 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 		return nil
 	}
 
-	if err := a.Host.Update(ctx, host.Target{Service: service, Ref: ref, Unit: rs.Unit, Fetched: f}); err != nil {
-		return err
-	}
-
-	old := rs.Version
-	rs.Channel, rs.PrevVersion, rs.Version = channel, old, f.Release.Version
-	rs.PrevPublishedAt, rs.PublishedAt = rs.PublishedAt, f.Release.PublishedAt
-	rs.InstalledAt = a.Now().UTC()
+	old := rs.PrevVersion
 	applyAutoUpdate(rs, args.AutoUpdate)
 	zone := s.Services[service].CFZone
 	if args.CFZone != "" {
@@ -160,6 +144,56 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 		}
 	}
 	return nil
+}
+
+// hostError marks a failure of the host stage of an update: the fetched
+// release was fine, but installing it failed. The host may have changed
+// files, so for auto-update it is a failed update, not a failed check.
+type hostError struct{ err error }
+
+func (e hostError) Error() string { return e.err.Error() }
+func (e hostError) Unwrap() error { return e.err }
+
+// updateRef fetches ref's channel and, unless rs already runs that build,
+// swaps it in on the host with a health check and records it in rs; the
+// caller saves the state. vet, when set, can refuse the fetched release
+// before the host is touched. The fetched release is returned whenever its
+// metadata was read, even if the update then failed; failures of the host
+// stage are hostErrors.
+func (a *App) updateRef(ctx context.Context, st store.Store, ref layout.Ref, service string, rs *state.RefState, channel string, vet func(release.Release) error) (release.Release, bool, error) {
+	dir, err := os.MkdirTemp("", "ship-update-")
+	if err != nil {
+		return release.Release{}, false, err
+	}
+	defer os.RemoveAll(dir)
+	f, err := release.Fetch(ctx, st, ref, channel, a.Arch, dir)
+	if err != nil {
+		return f.Release, false, err
+	}
+	if f.Unit == "" {
+		return f.Release, false, noUnitError{ref}
+	}
+	if vet != nil {
+		if err := vet(f.Release); err != nil {
+			return f.Release, false, err
+		}
+	}
+
+	// Re-installing the running release would only restart the unit and
+	// overwrite the rollback target with the same release. A channel-only
+	// publish keeps the channel name as its version, so the publish time
+	// must match too.
+	if f.Release.Version == rs.Version && f.Release.PublishedAt.Equal(rs.PublishedAt) {
+		return f.Release, false, nil
+	}
+
+	if err := a.Host.Update(ctx, host.Target{Service: service, Ref: ref, Unit: rs.Unit, Fetched: f}); err != nil {
+		return f.Release, false, hostError{err}
+	}
+	rs.Channel, rs.PrevVersion, rs.Version = channel, rs.Version, f.Release.Version
+	rs.PrevPublishedAt, rs.PublishedAt = rs.PublishedAt, f.Release.PublishedAt
+	rs.InstalledAt = a.Now().UTC()
+	return f.Release, true, nil
 }
 
 // Rollback swaps the ref back to the binary and unit it ran before its last
