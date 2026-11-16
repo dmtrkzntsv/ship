@@ -57,7 +57,7 @@ func newSelfUpdateCmd() *cobra.Command {
 			if version == "" {
 				return nil
 			}
-			unlock, err := a.State.Lock()
+			unlock, err := a.LockState()
 			if err != nil {
 				return fmt.Errorf("updated, but could not remember channel %q: %w", channel, err)
 			}

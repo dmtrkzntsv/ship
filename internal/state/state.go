@@ -127,6 +127,16 @@ func (f File) Save(s *State) error {
 
 // Lock takes an exclusive, non-blocking flock on the lock file.
 func (f File) Lock() (unlock func(), err error) {
+	return f.LockWait(0, nil)
+}
+
+// lockPoll is how often LockWait retries a held lock.
+const lockPoll = 100 * time.Millisecond
+
+// LockWait takes an exclusive flock on the lock file, waiting up to timeout
+// for another ship run to release it; onWait (if set) is called once, when
+// the lock is first found held. A timeout of zero tries once, like Lock.
+func (f File) LockWait(timeout time.Duration, onWait func()) (unlock func(), err error) {
 	lp := f.lockPath()
 	if err := os.MkdirAll(filepath.Dir(lp), 0o755); err != nil {
 		return nil, fmt.Errorf("create lock dir: %w", err)
@@ -135,12 +145,25 @@ func (f File) Lock() (unlock func(), err error) {
 	if err != nil {
 		return nil, fmt.Errorf("open lock %s: %w", lp, err)
 	}
-	if err := syscall.Flock(int(fd.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		fd.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
+	deadline := time.Now().Add(timeout)
+	for waited := false; ; waited = true {
+		err := syscall.Flock(int(fd.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			fd.Close()
+			return nil, fmt.Errorf("lock %s: %w", lp, err)
+		}
+		left := time.Until(deadline)
+		if left <= 0 {
+			fd.Close()
 			return nil, fmt.Errorf("%w %s", ErrLocked, lp)
 		}
-		return nil, fmt.Errorf("lock %s: %w", lp, err)
+		if !waited && onWait != nil {
+			onWait()
+		}
+		time.Sleep(min(lockPoll, left))
 	}
 	return func() {
 		_ = syscall.Flock(int(fd.Fd()), syscall.LOCK_UN)

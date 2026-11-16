@@ -80,6 +80,54 @@ func TestLockExclusive(t *testing.T) {
 	unlock2()
 }
 
+func TestLockWaitFree(t *testing.T) {
+	f := File{Path: filepath.Join(t.TempDir(), "state.json")}
+	unlock, err := f.LockWait(time.Minute, func() { t.Fatal("must not wait for a free lock") })
+	require.NoError(t, err)
+	unlock()
+}
+
+func TestLockWaitTimesOut(t *testing.T) {
+	f := File{Path: filepath.Join(t.TempDir(), "state.json")}
+	unlock, err := f.Lock()
+	require.NoError(t, err)
+	defer unlock()
+
+	waits := 0
+	start := time.Now()
+	_, err = f.LockWait(150*time.Millisecond, func() { waits++ })
+	require.ErrorIs(t, err, ErrLocked)
+	assert.Equal(t, 1, waits)
+	assert.GreaterOrEqual(t, time.Since(start), 150*time.Millisecond)
+
+	// No timeout: one try, no wait.
+	_, err = f.LockWait(0, func() { t.Fatal("must not wait") })
+	require.ErrorIs(t, err, ErrLocked)
+}
+
+func TestLockWaitGetsReleasedLock(t *testing.T) {
+	f := File{Path: filepath.Join(t.TempDir(), "state.json")}
+	unlock, err := f.Lock()
+	require.NoError(t, err)
+	time.AfterFunc(100*time.Millisecond, unlock)
+
+	waits := 0
+	unlock2, err := f.LockWait(10*time.Second, func() { waits++ })
+	require.NoError(t, err)
+	assert.Equal(t, 1, waits)
+	_, err = f.Lock()
+	require.ErrorIs(t, err, ErrLocked, "LockWait holds the lock")
+	unlock2()
+}
+
+func TestLockWaitOpenError(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "state.lock"), 0o755))
+	_, err := File{Path: filepath.Join(dir, "state.json")}.LockWait(time.Second, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "open lock")
+}
+
 func TestUnits(t *testing.T) {
 	s := &State{Services: map[string]*Service{}}
 	svc := s.Service("api")

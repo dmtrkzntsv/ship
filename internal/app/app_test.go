@@ -61,6 +61,7 @@ func TestNewWiresHost(t *testing.T) {
 	assert.Equal(t, 10*time.Second, a.Host.HealthWait)
 	assert.Equal(t, time.Second, a.Host.HealthTick)
 	assert.WithinDuration(t, time.Now(), a.Now(), time.Minute)
+	assert.Equal(t, 2*time.Minute, a.LockWait)
 
 	cf := a.CF("tok")
 	assert.Equal(t, "tok", cf.Token)

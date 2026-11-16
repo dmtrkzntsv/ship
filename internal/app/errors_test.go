@@ -1,17 +1,20 @@
 package app_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/dmtrkzntsv/ship/internal/app"
 	"github.com/dmtrkzntsv/ship/internal/release"
+	"github.com/dmtrkzntsv/ship/internal/state"
 	"github.com/dmtrkzntsv/ship/internal/store"
 )
 
@@ -97,6 +100,48 @@ func TestCommandsReportLockAndStateErrors(t *testing.T) {
 			assert.Empty(t, e.sys.Calls)
 		})
 	}
+}
+
+func TestInteractiveCommandsWaitForLock(t *testing.T) {
+	ctx := context.Background()
+	cmds := map[string]func(a *app.App) error{
+		"install": func(a *app.App) error {
+			return a.Install(ctx, app.InstallArgs{Ref: "twillingate", Version: "v2"})
+		},
+		"uninstall": func(a *app.App) error {
+			return a.Uninstall(ctx, app.UninstallArgs{Ref: "econumo", Service: "econumo-beta"})
+		},
+		"update":   func(a *app.App) error { return a.Update(ctx, app.UpdateArgs{Ref: "econumo", Service: "econumo-beta"}) },
+		"rollback": func(a *app.App) error { return a.Rollback(ctx, "econumo", "econumo-beta") },
+	}
+	for name, run := range cmds {
+		t.Run(name, func(t *testing.T) {
+			e := installedEnv(t)
+			if name == "rollback" {
+				require.NoError(t, e.app.Update(ctx, app.UpdateArgs{Ref: "econumo", Service: "econumo-beta"}))
+			}
+			errOut := &bytes.Buffer{}
+			e.app.Err = errOut
+			e.app.LockWait = 10 * time.Second
+			unlock, err := e.app.State.Lock()
+			require.NoError(t, err)
+			time.AfterFunc(100*time.Millisecond, unlock)
+
+			require.NoError(t, run(e.app))
+			assert.Equal(t, "waiting for another ship run to finish\u2026\n", errOut.String())
+		})
+	}
+}
+
+func TestInteractiveLockWaitTimesOut(t *testing.T) {
+	e := installedEnv(t)
+	e.app.LockWait = 50 * time.Millisecond
+	unlock, err := e.app.State.Lock()
+	require.NoError(t, err)
+	defer unlock()
+	err = e.app.Update(context.Background(), app.UpdateArgs{Ref: "econumo", Service: "econumo-beta"})
+	require.ErrorIs(t, err, state.ErrLocked)
+	assert.Empty(t, e.sys.Calls)
 }
 
 func TestCommandsRejectBadRefs(t *testing.T) {

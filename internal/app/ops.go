@@ -31,7 +31,7 @@ func (a *App) Uninstall(ctx context.Context, args UninstallArgs) error {
 			return err
 		}
 	}
-	unlock, err := a.State.Lock()
+	unlock, err := a.LockState()
 	if err != nil {
 		return err
 	}

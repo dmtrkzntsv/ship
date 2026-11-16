@@ -39,6 +39,21 @@ type App struct {
 	Notifier func() (Notifier, error)
 	// RunClockPath is the file holding the auto-update run failure clock.
 	RunClockPath string
+	// LockWait is how long interactive commands wait for another ship run
+	// (the auto-update timer, say) to release the state lock; zero fails at once.
+	LockWait time.Duration
+}
+
+// interactiveLockWait is how long operator commands wait for the state lock.
+const interactiveLockWait = 2 * time.Minute
+
+// LockState takes the state lock for an interactive command, waiting up to
+// LockWait for another ship run to finish (saying so once on Err).
+// ship update --auto never waits: it uses State.Lock.
+func (a *App) LockState() (unlock func(), err error) {
+	return a.State.LockWait(a.LockWait, func() {
+		fmt.Fprintln(a.Err, "waiting for another ship run to finish\u2026")
+	})
 }
 
 // New loads the configuration (a missing file is fine; env-only is valid),
@@ -62,6 +77,7 @@ func New(out, errOut io.Writer) (*App, error) {
 		Arch:         release.HostArch(),
 		Now:          time.Now,
 		RunClockPath: runClockPath,
+		LockWait:     interactiveLockWait,
 		ShipPath: func() (string, error) {
 			p, err := os.Executable()
 			if err != nil {
