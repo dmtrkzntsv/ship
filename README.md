@@ -169,6 +169,7 @@ ship versions  <ref>
 ship publish   <project> --path DIR [--version V] [--channels C] [--keep N]
 ship prune     <project> [--keep N] [--older-than D] [--yes]
 ship self-update [--version V]
+ship notify test
 ship completion bash|zsh|fish
 ```
 
@@ -247,7 +248,8 @@ auto-update on stops it the same way, so the next run does not undo it. A manual
 
 ### Notifications
 
-Only automatic updates notify; manual commands never do. Set one URL in
+Automatic updates notify, and so does every change of the auto-update
+setting; other manual commands never do. Set one URL in
 `/etc/ship/config.toml` or in `SHIP_NOTIFY_URL`, in
 [shoutrrr](https://containrrr.dev/shoutrrr/) format (`telegram://`, `ntfy://`,
 `slack://`, `discord://`, `generic://`, `smtp://`); unset means no notifications:
@@ -257,7 +259,17 @@ Only automatic updates notify; manual commands never do. Set one URL in
 url = "telegram://<bot_token>@telegram?chats=<chat_id>"
 ```
 
-Every message starts with the host name. There are six kinds:
+Check it with `sudo ship notify test`, which sends `homelab: test notification
+from ship` the way automatic runs do and prints the error if it fails.
+
+Every message starts with the host name. There are seven kinds:
+
+- auto-update on/off: `homelab: auto-update on for econumo-beta (dev)` (or
+  `off`), sent by `install --auto-update` and by `update --auto-update[=false]`
+  when the setting changes, and `homelab: auto-update stopped for econumo-beta
+  (dev) after a manual rollback`. The command also prints `<unit>: auto-update
+  on|off`. The setting is saved even when the send fails; the command then
+  exits non-zero with `notification not sent: <error>`;
 
 - updated: `homelab: econumo (dev) 2026-11-15T10:02 → 2026-11-16T09:40`;
 - failed: `homelab: econumo (dev) build X failed, still on Y; auto-update stopped`,

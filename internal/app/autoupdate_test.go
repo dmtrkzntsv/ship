@@ -447,6 +447,7 @@ func TestAutoUpdateContinuesAfterFailure(t *testing.T) {
 	f := autoEnv(t)
 	ctx := context.Background()
 	require.NoError(t, f.app.Install(ctx, app.InstallArgs{Ref: "econumo", Service: "econumo-a", Version: "dev", AutoUpdate: true}))
+	f.n.got = nil // drop the "auto-update on" announcement
 	f.sys.Active["econumo-a"] = true
 	publish(t, f.store, "econumo", "1.6.0", []string{"dev"}, true, "econumo")
 	f.out.Reset()
@@ -469,6 +470,7 @@ func TestAutoUpdateInterruptKeepsAutoUpdate(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	require.NoError(t, f.app.Install(ctx, app.InstallArgs{Ref: "econumo", Service: "econumo-z", Version: "dev", AutoUpdate: true}))
+	f.n.got = nil // drop the "auto-update on" announcement
 	f.sys.Active["econumo-z"] = true
 	// econumo-z installed 1.5.0; publish 1.6.0 so both refs have work.
 	publish(t, f.store, "econumo", "1.6.0", []string{"dev"}, true, "econumo")
@@ -496,6 +498,7 @@ func TestAutoUpdateInterruptedRevertFailedSendsDown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	require.NoError(t, f.app.Install(ctx, app.InstallArgs{Ref: "econumo", Service: "econumo-z", Version: "dev", AutoUpdate: true}))
+	f.n.got = nil // drop the "auto-update on" announcement
 	f.sys.Active["econumo-z"] = true
 	publish(t, f.store, "econumo", "1.6.0", []string{"dev"}, true, "econumo")
 	f.errOut.Reset()
@@ -787,6 +790,7 @@ func TestAutoUpdateStateNotSavedAfterUpdateHalts(t *testing.T) {
 	f := autoEnv(t)
 	ctx := context.Background()
 	require.NoError(t, f.app.Install(ctx, app.InstallArgs{Ref: "econumo", Service: "econumo-z", Version: "dev", AutoUpdate: true}))
+	f.n.got = nil // drop the "auto-update on" announcement
 	f.sys.Active["econumo-z"] = true
 	publish(t, f.store, "econumo", "1.6.0", []string{"dev"}, true, "econumo")
 	readOnlyStateOnRestart(t, f.env, func(string) bool { return true })

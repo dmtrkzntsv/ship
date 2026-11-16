@@ -98,6 +98,11 @@ so. A purge failure keeps the update and makes the run exit non-zero.
 
 The owner wants to hear about automatic updates on their phone, and only
 about automatic updates: manual commands never notify (the operator is there).
+*Amended 2026-11-15 (owner's decision):* changing the auto-update setting
+notifies too (`auto-update on|off for <unit> (<channel>)`, and `stopped …
+after a manual rollback`), so every host's auto-update state is visible in the
+channel and turning it on doubles as a test; `ship notify test` sends a test
+message on demand.
 
 **Configuration.** One optional URL, `[notify] url = "…"` in the config file
 or `SHIP_NOTIFY_URL`, in shoutrrr's URL format (`telegram://`, `ntfy://`,

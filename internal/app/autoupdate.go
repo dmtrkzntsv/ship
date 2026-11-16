@@ -117,12 +117,9 @@ const lockHeldReason = "another ship run has held the state lock"
 // state lock is not an error: the next run retries. With no ref opted in the
 // run does nothing at all, not even open the store.
 func (a *App) AutoUpdate(ctx context.Context) error {
-	n := Notifier(noopNotifier{})
-	if a.Notifier != nil {
-		var err error
-		if n, err = a.Notifier(); err != nil {
-			return err
-		}
+	n, err := a.notifier()
+	if err != nil {
+		return err
 	}
 	r := &autoRun{a: a, ctx: ctx, n: n, now: a.Now().UTC()}
 
