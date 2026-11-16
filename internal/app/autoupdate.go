@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/dmtrkzntsv/ship/internal/config"
 	"github.com/dmtrkzntsv/ship/internal/host"
 	"github.com/dmtrkzntsv/ship/internal/layout"
 	"github.com/dmtrkzntsv/ship/internal/notify"
@@ -73,24 +74,46 @@ func (a *App) checkAutoUpdate() (string, error) {
 	return path, nil
 }
 
-// enableAutoUpdate installs and starts the auto-update timer.
+// enableAutoUpdate installs and starts the auto-update timer, warning about
+// SHIP_* settings in this shell that the timer's runs will not have.
 func (a *App) enableAutoUpdate(ctx context.Context) error {
 	path, err := a.checkAutoUpdate()
 	if err != nil {
 		return err
 	}
+	for _, name := range a.shellSettings() {
+		fmt.Fprintf(a.Err, "warning: %s is set in this shell; the auto-update timer reads only %s\n", name, config.SystemPath)
+	}
 	return a.Host.EnsureAutoUpdateTimer(ctx, path)
+}
+
+// shellSettings names the non-empty SHIP_* variables in the environment, sorted.
+func (a *App) shellSettings() []string {
+	if a.Environ == nil {
+		return nil
+	}
+	var names []string
+	for _, kv := range a.Environ() {
+		name, val, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(name, "SHIP_") && val != "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 // lockHeldReason is the run clock's reason while other ship runs hold the lock.
 const lockHeldReason = "another ship run has held the state lock"
 
-// AutoUpdate is ship update --auto: it updates every ref with auto-update on
-// through the normal update path and notifies about what happened. A failed
-// update stops auto-update on its ref; a ref whose release cannot be fetched
-// keeps it and is announced only after an hour. One ref failing does not stop
-// the others; the returned error counts the failed refs and unsent
-// notifications. A held state lock is not an error: the next run retries.
+// AutoUpdate is ship update --auto: it updates every running ref with
+// auto-update on through the normal update path and notifies about what
+// happened. A ref whose unit is not running is skipped. A failed update stops
+// auto-update on its ref; a ref whose release cannot be fetched keeps it and
+// is announced only after an hour. One ref failing does not stop the others;
+// the returned error counts the failed refs and unsent notifications. A held
+// state lock is not an error: the next run retries. With no ref opted in the
+// run does nothing at all, not even open the store.
 func (a *App) AutoUpdate(ctx context.Context) error {
 	n := Notifier(noopNotifier{})
 	if a.Notifier != nil {
@@ -103,9 +126,10 @@ func (a *App) AutoUpdate(ctx context.Context) error {
 
 	unlock, err := a.State.Lock()
 	if errors.Is(err, state.ErrLocked) {
+		// Exits 0 whatever happens: the clock and notify errors are on stderr.
 		r.observeRun(lockHeldReason)
 		fmt.Fprintln(a.Out, "another ship run holds the state lock; trying again next run")
-		return r.err()
+		return nil
 	}
 	if err != nil {
 		r.observeRun(err.Error())
@@ -117,6 +141,10 @@ func (a *App) AutoUpdate(ctx context.Context) error {
 		r.observeRun(err.Error())
 		return err
 	}
+	targets := autoTargets(s)
+	if len(targets) == 0 {
+		return nil
+	}
 	st, err := a.NewStore()
 	if err != nil {
 		r.observeRun(err.Error())
@@ -124,9 +152,18 @@ func (a *App) AutoUpdate(ctx context.Context) error {
 	}
 	r.observeRun("")
 
-	for _, t := range autoTargets(s) {
+	for _, t := range targets {
+		// A stopped unit (never started after install, or ship stop) is left
+		// alone: updating would start it.
+		if !a.Host.Sys.IsActive(ctx, t.rs.Unit) {
+			if err := ctx.Err(); err != nil {
+				return errors.Join(err, r.err())
+			}
+			fmt.Fprintf(a.Out, "%s: not running, skipped\n", t.rs.Unit)
+			continue
+		}
 		if err := r.update(s, st, t); err != nil {
-			return err
+			return errors.Join(err, r.err())
 		}
 	}
 	return r.err()
@@ -169,38 +206,46 @@ type autoRun struct {
 }
 
 // update runs one ref's update, classifies the result, saves the state and
-// sends what it calls for. Only an interrupt is returned: it ends the run.
+// sends what it calls for. An interrupt is returned: it ends the run. So is
+// a state that cannot be saved after the host was changed: carrying on
+// would act on a state that no longer matches the host.
 func (r *autoRun) update(s *state.State, st store.Store, t autoTarget) error {
 	a, rs := r.a, t.rs
 	r.refs++
 	before, old := *rs, rs.Version
 	var (
 		rel     release.Release
-		changed bool
+		outcome updateOutcome
 	)
 	ref, err := layout.ParseRef(t.key)
 	if err == nil {
-		rel, changed, err = a.updateRef(r.ctx, st, ref, t.service, rs, rs.Channel, nil)
+		rel, outcome, err = a.updateRef(r.ctx, st, ref, t.service, rs, rs.Channel, nil)
 	}
+	// A command killed by the interrupt fails with its own error (signal:
+	// killed), not context.Canceled.
+	interrupted := err != nil && (errors.Is(err, context.Canceled) || r.ctx.Err() != nil)
 	what := fmt.Sprintf("%s (%s)", rs.Unit, rs.Channel)
-	var msgs []notify.Message
+	var (
+		msgs    []notify.Message
+		updated *notify.Message
+	)
 	failed, purge := false, false
 	stopped := "" // a failed update's title, without the auto-update note
 	switch {
 	case err == nil:
 		msgs = r.checkClock(rs, what, nil)
-		if changed {
+		if outcome == swapped {
 			fmt.Fprintf(a.Out, "%s: %s -> %s%s\n", rs.Unit, old, rs.Version, republished(old, rs))
-			msgs = append(msgs, notify.Message{Title: fmt.Sprintf("%s %s \u2192 %s%s", what, old, rs.Version, republished(old, rs))})
-			purge = true
+			updated = &notify.Message{Title: fmt.Sprintf("%s %s \u2192 %s%s", what, old, rs.Version, republished(old, rs))}
 		}
+		purge = outcome != upToDate
 	case errors.Is(err, host.ErrRevertFailed):
 		// Checked before an interrupt: the service is down whatever cut the
 		// run short, and this is the one message that must not be lost.
 		failed = true
 		stopAutoUpdate(rs, r.now)
 		stopped = fmt.Sprintf("%s is DOWN \u2014 update to %s failed and rollback to %s failed", rs.Unit, rel.Version, old)
-	case errors.Is(err, context.Canceled):
+	case interrupted:
 		// The host restored the previous pair: auto-update stays on, quietly.
 		fmt.Fprintf(a.Err, "%s: %v\n", rs.Unit, err)
 		return err
@@ -227,6 +272,21 @@ func (r *autoRun) update(s *state.State, st store.Store, t autoTarget) error {
 			failed = true
 		}
 	}
+	if saveErr != nil && err == nil && outcome != upToDate {
+		// The host runs the new build but state still names the old one.
+		// The next run finds it live and only records it; until then the
+		// halt message replaces Updated (and the clock messages, which the
+		// unsaved state repeats next run).
+		r.failed++
+		r.notify(notify.Message{
+			Title: fmt.Sprintf("%s updated to %s but the state could not be saved; automatic updates halted", what, rs.Version),
+			Body:  saveErr.Error(),
+		})
+		return fmt.Errorf("%s: updated to %s but the state could not be saved: %w", rs.Unit, rs.Version, saveErr)
+	}
+	if updated != nil {
+		msgs = append(msgs, *updated)
+	}
 	if stopped != "" {
 		m := notify.Message{Title: stopped + "; auto-update stopped", Body: err.Error()}
 		if saveErr != nil {
@@ -243,7 +303,7 @@ func (r *autoRun) update(s *state.State, st store.Store, t autoTarget) error {
 	if purge && !r.purge(s.Services[t.service], rs.Unit) {
 		failed = true
 	}
-	if errors.Is(err, context.Canceled) {
+	if interrupted {
 		return err // reached only after a Down: the run still ends here
 	}
 	if failed {

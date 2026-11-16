@@ -247,9 +247,9 @@ type autoFixture struct {
 	now    time.Time
 }
 
-// autoEnv has econumo 1.4.0 from dev installed in econumo-beta with
-// auto-update on, the same in econumo-prod with it off, and 1.5.0 published
-// to dev afterwards. The clock is at later and moves with f.at.
+// autoEnv has econumo 1.4.0 from dev installed and running in econumo-beta
+// with auto-update on, the same in econumo-prod with it off, and 1.5.0
+// published to dev afterwards. The clock is at later and moves with f.at.
 func autoEnv(t *testing.T) *autoFixture {
 	t.Helper()
 	e := newEnv(t)
@@ -258,6 +258,7 @@ func autoEnv(t *testing.T) *autoFixture {
 	require.NoError(t, e.app.Install(ctx, app.InstallArgs{Ref: "econumo", Service: "econumo-beta", Version: "dev", AutoUpdate: true}))
 	require.NoError(t, e.app.Install(ctx, app.InstallArgs{Ref: "econumo", Service: "econumo-prod", Version: "dev"}))
 	publish(t, e.store, "econumo", "1.5.0", []string{"dev"}, true, "econumo")
+	e.sys.Active = map[string]bool{"econumo-beta": true, "econumo-prod": true}
 	e.app.NewStore = func() (store.Store, error) { return f.st, nil }
 	e.app.Notifier = func() (app.Notifier, error) { return f.n, nil }
 	e.app.RunClockPath = filepath.Join(t.TempDir(), "auto-update.json")
@@ -308,6 +309,7 @@ func TestAutoUpdateRepublishedChannelNamesPublishTime(t *testing.T) {
 	first, second := fixedNow.Add(time.Minute), fixedNow.Add(2*time.Minute)
 	publishAt(t, f.store, first, "devonly", "", []string{"dev"}, true, "devonly")
 	require.NoError(t, f.app.Install(ctx, app.InstallArgs{Ref: "devonly", Version: "dev", AutoUpdate: true}))
+	f.sys.Active["devonly"] = true
 	publishAt(t, f.store, second, "devonly", "", []string{"dev"}, true, "devonly")
 	f.out.Reset()
 
@@ -404,7 +406,7 @@ func TestAutoUpdateHostStageFailureStops(t *testing.T) {
 func TestAutoUpdateHealthFailStops(t *testing.T) {
 	f := autoEnv(t)
 	// The new build fails its health check; the restored one comes up.
-	f.sys.ActiveAfterRestart = func(u string) bool { return restarts(f.sys.Calls, u) >= 2 }
+	f.sys.ActiveAfterRestart = func(u string) bool { return restarts(f.sys.Calls, u) != 1 }
 	f.sys.Journal = "panic: boom"
 
 	require.Error(t, f.app.AutoUpdate(context.Background()))
@@ -418,9 +420,14 @@ func TestAutoUpdateHealthFailStops(t *testing.T) {
 	assert.Equal(t, "1.4.0", rs.Version)
 }
 
+// runningUntilRestart: the unit runs until it is restarted, then never again.
+func runningUntilRestart(f *autoFixture) func(string) bool {
+	return func(u string) bool { return restarts(f.sys.Calls, u) == 0 }
+}
+
 func TestAutoUpdateRevertFailedSendsDown(t *testing.T) {
 	f := autoEnv(t)
-	f.sys.ActiveAfterRestart = func(string) bool { return false }
+	f.sys.ActiveAfterRestart = runningUntilRestart(f)
 
 	require.Error(t, f.app.AutoUpdate(context.Background()))
 	require.Len(t, f.n.got, 1)
@@ -435,9 +442,10 @@ func TestAutoUpdateContinuesAfterFailure(t *testing.T) {
 	f := autoEnv(t)
 	ctx := context.Background()
 	require.NoError(t, f.app.Install(ctx, app.InstallArgs{Ref: "econumo", Service: "econumo-a", Version: "dev", AutoUpdate: true}))
+	f.sys.Active["econumo-a"] = true
 	publish(t, f.store, "econumo", "1.6.0", []string{"dev"}, true, "econumo")
 	f.out.Reset()
-	f.sys.ActiveAfterRestart = func(u string) bool { return u != "econumo-a" }
+	f.sys.ActiveAfterRestart = func(u string) bool { return u != "econumo-a" || restarts(f.sys.Calls, u) == 0 }
 
 	err := f.app.AutoUpdate(ctx)
 	require.Error(t, err)
@@ -456,10 +464,13 @@ func TestAutoUpdateInterruptKeepsAutoUpdate(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	require.NoError(t, f.app.Install(ctx, app.InstallArgs{Ref: "econumo", Service: "econumo-z", Version: "dev", AutoUpdate: true}))
+	f.sys.Active["econumo-z"] = true
 	// econumo-z installed 1.5.0; publish 1.6.0 so both refs have work.
 	publish(t, f.store, "econumo", "1.6.0", []string{"dev"}, true, "econumo")
-	f.sys.ActiveAfterRestart = func(string) bool {
-		cancel()
+	f.sys.ActiveAfterRestart = func(u string) bool {
+		if restarts(f.sys.Calls, u) > 0 {
+			cancel()
+		}
 		return true
 	}
 
@@ -480,10 +491,14 @@ func TestAutoUpdateInterruptedRevertFailedSendsDown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	require.NoError(t, f.app.Install(ctx, app.InstallArgs{Ref: "econumo", Service: "econumo-z", Version: "dev", AutoUpdate: true}))
+	f.sys.Active["econumo-z"] = true
 	publish(t, f.store, "econumo", "1.6.0", []string{"dev"}, true, "econumo")
 	f.errOut.Reset()
 	// SIGTERM during the health check, and the restored pair does not come up.
-	f.sys.ActiveAfterRestart = func(string) bool {
+	f.sys.ActiveAfterRestart = func(u string) bool {
+		if restarts(f.sys.Calls, u) == 0 {
+			return true
+		}
 		cancel()
 		return false
 	}
@@ -502,7 +517,7 @@ func TestAutoUpdateInterruptedRevertFailedSendsDown(t *testing.T) {
 
 func TestAutoUpdateStopNotSavedIsNotClaimed(t *testing.T) {
 	f := autoEnv(t)
-	f.sys.ActiveAfterRestart = func(string) bool { return false }
+	f.sys.ActiveAfterRestart = runningUntilRestart(f)
 	readOnlyStateDir(t, f.env)
 
 	require.Error(t, f.app.AutoUpdate(context.Background()))
@@ -762,4 +777,157 @@ func TestAutoUpdateStateHoldsNoErrorText(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), "secret-error-text-xyz")
 	assert.Contains(t, string(data), "check_failing_since")
+}
+
+func TestAutoUpdateStateNotSavedAfterUpdateHalts(t *testing.T) {
+	f := autoEnv(t)
+	ctx := context.Background()
+	require.NoError(t, f.app.Install(ctx, app.InstallArgs{Ref: "econumo", Service: "econumo-z", Version: "dev", AutoUpdate: true}))
+	f.sys.Active["econumo-z"] = true
+	publish(t, f.store, "econumo", "1.6.0", []string{"dev"}, true, "econumo")
+	readOnlyStateDir(t, f.env)
+	bin := f.app.Host.Paths.Bin("econumo-beta", "econumo")
+	f.out.Reset()
+
+	err := f.app.AutoUpdate(ctx)
+	require.Error(t, err)
+	require.Len(t, f.n.got, 1, "no Updated message, and the run stops")
+	assert.Equal(t, "econumo-beta (dev) updated to 1.6.0 but the state could not be saved; automatic updates halted", f.n.got[0].Title)
+	assert.Contains(t, f.n.got[0].Body, "create temp state file")
+	assert.Equal(t, 1, restarts(f.sys.Calls, "econumo-beta"))
+	assert.Equal(t, 0, restarts(f.sys.Calls, "econumo-z"), "later refs are not processed")
+	assert.Equal(t, "1.4.0", f.ref(t, "econumo-beta").Version)
+	prev := readFile(t, bin+".prev")
+	assert.Contains(t, prev, "1.4.0")
+
+	// The next run finds 1.6.0 already live: it records it, without a
+	// restart, a notification or touching the rollback target.
+	require.NoError(t, os.Chmod(filepath.Dir(f.app.State.Path), 0o755))
+	f.n.got = nil
+	f.sys.Calls = nil
+	f.out.Reset()
+	f.at(5 * time.Minute)
+	require.NoError(t, f.app.AutoUpdate(ctx))
+	assert.Equal(t, 0, restarts(f.sys.Calls, "econumo-beta"))
+	assert.Equal(t, prev, readFile(t, bin+".prev"))
+	assert.Equal(t, []string{"econumo-z (dev) 1.5.0 → 1.6.0"}, f.n.titles())
+	assert.Contains(t, f.out.String(), "econumo-beta: already installed 1.6.0, state recorded\n")
+	rs := f.ref(t, "econumo-beta")
+	assert.Equal(t, "1.6.0", rs.Version)
+	assert.Equal(t, "1.4.0", rs.PrevVersion)
+	assert.True(t, rs.AutoUpdate)
+}
+
+func TestAutoUpdateSkipsRefThatIsNotRunning(t *testing.T) {
+	f := autoEnv(t)
+	ctx := context.Background()
+	f.sys.Active["econumo-beta"] = false
+	f.st.err = errors.New("dial tcp: connection refused")
+	s := f.state(t)
+	s.Services["econumo-beta"].Refs["econumo"].CheckFailingSince = fixedNow
+	require.NoError(t, f.app.State.Save(s))
+	before, err := os.ReadFile(f.app.State.Path)
+	require.NoError(t, err)
+
+	f.at(2 * time.Hour)
+	require.NoError(t, f.app.AutoUpdate(ctx))
+	assert.Equal(t, "econumo-beta: not running, skipped\n", f.out.String())
+	assert.Empty(t, f.n.got)
+	assert.Equal(t, 0, restarts(f.sys.Calls, "econumo-beta"))
+	assert.NotContains(t, f.sys.Calls, "systemctl start econumo-beta")
+	after, err := os.ReadFile(f.app.State.Path)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after), "state and its check clock untouched")
+}
+
+func TestAutoUpdateInterruptedCommandKeepsAutoUpdate(t *testing.T) {
+	f := autoEnv(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	// SIGTERM kills systemd-analyze: its error does not say context.Canceled.
+	f.sys.VerifyErr = errors.New("signal: killed")
+	cancel()
+
+	err := f.app.AutoUpdate(ctx)
+	require.Error(t, err)
+	assert.Empty(t, f.n.got)
+	rs := f.ref(t, "econumo-beta")
+	assert.True(t, rs.AutoUpdate)
+	assert.True(t, rs.AutoUpdateStoppedAt.IsZero())
+	assert.Equal(t, "1.4.0", rs.Version)
+}
+
+func TestAutoUpdateNothingOptedInTouchesNothing(t *testing.T) {
+	f := autoEnv(t)
+	ctx := context.Background()
+	require.NoError(t, f.app.Update(ctx, app.UpdateArgs{Ref: "econumo", Service: "econumo-beta", Version: "dev", AutoUpdate: ptr(false)}))
+	f.n.got = nil
+	f.app.NewStore = func() (store.Store, error) {
+		t.Fatal("no store is opened with nothing to update")
+		return nil, nil
+	}
+	for _, d := range []time.Duration{0, 2 * time.Hour} {
+		f.at(d)
+		require.NoError(t, f.app.AutoUpdate(ctx))
+	}
+	assert.Empty(t, f.n.got)
+	assert.NoFileExists(t, f.app.RunClockPath)
+
+	// A failing clock from earlier runs is left as it is.
+	clock := `{"failing_since":"2026-10-29T12:00:00Z","reason":"R2 endpoint is not set"}`
+	require.NoError(t, os.WriteFile(f.app.RunClockPath, []byte(clock), 0o600))
+	require.NoError(t, f.app.AutoUpdate(ctx))
+	assert.Equal(t, clock, readFile(t, f.app.RunClockPath))
+	assert.Empty(t, f.n.got)
+}
+
+func TestAutoUpdateLockHeldExitsZero(t *testing.T) {
+	f := autoEnv(t)
+	ctx := context.Background()
+	unlock, err := f.app.State.Lock()
+	require.NoError(t, err)
+	defer unlock()
+	f.n.err = errors.New("send failed")
+	require.NoError(t, f.app.AutoUpdate(ctx))
+	f.at(61 * time.Minute)
+	require.NoError(t, f.app.AutoUpdate(ctx), "an unsent notification does not fail a lock-held run")
+	assert.Contains(t, f.errOut.String(), "send failed")
+
+	f.app.RunClockPath = t.TempDir() // a directory: the clock cannot be saved
+	require.NoError(t, f.app.AutoUpdate(ctx), "an unsaved clock does not fail a lock-held run")
+	assert.Contains(t, f.errOut.String(), "warning: ")
+}
+
+func TestAutoUpdateInterruptedBeforeRunningCheck(t *testing.T) {
+	f := autoEnv(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	f.sys.Active["econumo-beta"] = false // what systemctl reports once killed
+	cancel()
+	err := f.app.AutoUpdate(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Empty(t, f.out.String())
+	assert.Empty(t, f.n.got)
+}
+
+func TestTurningAutoUpdateOnWarnsAboutShellConfig(t *testing.T) {
+	e := newEnv(t)
+	errOut := &bytes.Buffer{}
+	e.app.Err = errOut
+	e.app.Environ = func() []string {
+		return []string{"SHIP_R2_SECRET_ACCESS_KEY=s", "PATH=/bin", "SHIP_NOTIFY_URL=ntfy://x", "SHIP_R2_BUCKET="}
+	}
+	ctx := context.Background()
+	require.NoError(t, e.app.Install(ctx, app.InstallArgs{Ref: "econumo", Service: "econumo-beta", Version: "dev", AutoUpdate: true}))
+	want := "warning: SHIP_NOTIFY_URL is set in this shell; the auto-update timer reads only /etc/ship/config.toml\n" +
+		"warning: SHIP_R2_SECRET_ACCESS_KEY is set in this shell; the auto-update timer reads only /etc/ship/config.toml\n"
+	assert.Equal(t, want, errOut.String())
+
+	errOut.Reset()
+	require.NoError(t, e.app.Update(ctx, app.UpdateArgs{Ref: "econumo", Service: "econumo-beta", AutoUpdate: ptr(true)}))
+	assert.Equal(t, want, errOut.String())
+
+	// Turning it off, or a plain install, warns about nothing.
+	errOut.Reset()
+	require.NoError(t, e.app.Update(ctx, app.UpdateArgs{Ref: "econumo", Service: "econumo-beta", AutoUpdate: ptr(false)}))
+	require.NoError(t, e.app.Install(ctx, app.InstallArgs{Ref: "twillingate", Version: "v2"}))
+	assert.Empty(t, errOut.String())
 }

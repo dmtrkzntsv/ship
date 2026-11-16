@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -39,6 +40,9 @@ type App struct {
 	Notifier func() (Notifier, error)
 	// RunClockPath is the file holding the auto-update run failure clock.
 	RunClockPath string
+	// Environ lists the environment ("KEY=value"); turning auto-update on
+	// warns about SHIP_* settings the timer will not see. Nil: none.
+	Environ func() []string
 	// LockWait is how long interactive commands wait for another ship run
 	// (the auto-update timer, say) to release the state lock; zero fails at once.
 	LockWait time.Duration
@@ -54,6 +58,31 @@ func (a *App) LockState() (unlock func(), err error) {
 	return a.State.LockWait(a.LockWait, func() {
 		fmt.Fprintln(a.Err, "waiting for another ship run to finish\u2026")
 	})
+}
+
+// locateShip is the ship path the auto-update unit runs: the "ship" found on
+// PATH when it is the running binary (a stable path such as
+// /usr/local/bin/ship, even when it links to a versioned install), else the
+// running executable as the kernel reports it. Symlinks are not resolved, so
+// the unit does not pin one version's directory.
+func locateShip(lookPath func(string) (string, error), executable func() (string, error)) (string, error) {
+	exe, err := executable()
+	if err != nil {
+		return "", err
+	}
+	p, err := lookPath("ship")
+	if err != nil {
+		return exe, nil
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		p = abs
+	}
+	pi, perr := os.Stat(p)
+	ei, eerr := os.Stat(exe)
+	if perr != nil || eerr != nil || !os.SameFile(pi, ei) {
+		return exe, nil
+	}
+	return p, nil
 }
 
 // New loads the configuration (a missing file is fine; env-only is valid),
@@ -78,13 +107,8 @@ func New(out, errOut io.Writer) (*App, error) {
 		Now:          time.Now,
 		RunClockPath: runClockPath,
 		LockWait:     interactiveLockWait,
-		ShipPath: func() (string, error) {
-			p, err := os.Executable()
-			if err != nil {
-				return "", err
-			}
-			return filepath.EvalSymlinks(p)
-		},
+		Environ:      os.Environ,
+		ShipPath:     func() (string, error) { return locateShip(exec.LookPath, os.Executable) },
 		CF: func(token string) *cloudflare.Client {
 			return &cloudflare.Client{Token: token, HTTP: &http.Client{Timeout: 30 * time.Second}}
 		},
