@@ -126,3 +126,46 @@ func TestNotifyTest(t *testing.T) {
 	e.app.Notifier = func() (app.Notifier, error) { return nil, errors.New("bad url") }
 	assert.EqualError(t, e.app.NotifyTest(ctx), "bad url")
 }
+
+// A failed timer start leaves the setting saved as on; the change is still
+// announced, because the rerun the error asks for finds it already on.
+func TestToggleAnnouncedWhenTimerFails(t *testing.T) {
+	ctx := context.Background()
+	on := func() app.UpdateArgs {
+		return app.UpdateArgs{Ref: "econumo", Service: "econumo-beta", AutoUpdate: ptr(true)}
+	}
+
+	t.Run("swapped", func(t *testing.T) {
+		e := installedEnv(t)
+		n := withNotifier(e)
+		e.sys.EnableErr = assert.AnError
+		require.ErrorIs(t, e.app.Update(ctx, on()), assert.AnError)
+		assert.Equal(t, []string{"auto-update on for econumo-beta (dev)"}, n.titles())
+
+		// The rerun brings the timer up and announces nothing new.
+		e.sys.EnableErr = nil
+		require.NoError(t, e.app.Update(ctx, on()))
+		assert.Len(t, n.got, 1)
+	})
+
+	t.Run("up to date", func(t *testing.T) {
+		e := installedEnv(t)
+		require.NoError(t, e.app.Update(ctx, app.UpdateArgs{Ref: "econumo", Service: "econumo-beta"}))
+		n := withNotifier(e)
+		e.sys.EnableErr = assert.AnError
+		err := e.app.Update(ctx, on())
+		require.ErrorIs(t, err, assert.AnError)
+		assert.Equal(t, []string{"auto-update on for econumo-beta (dev)"}, n.titles())
+		assert.Contains(t, e.out.String(), "econumo-beta: auto-update on\n")
+	})
+
+	t.Run("install", func(t *testing.T) {
+		e := newEnv(t)
+		n := withNotifier(e)
+		// Fail only the timer's enable: the ref's own unit is enabled first.
+		e.sys.Fail = map[string]error{"systemctl enable --now ship-auto-update.timer": assert.AnError}
+		err := e.app.Install(ctx, app.InstallArgs{Ref: "econumo", Service: "econumo-beta", Version: "dev", AutoUpdate: true})
+		require.ErrorIs(t, err, assert.AnError)
+		assert.Equal(t, []string{"auto-update on for econumo-beta (dev)"}, n.titles())
+	})
+}

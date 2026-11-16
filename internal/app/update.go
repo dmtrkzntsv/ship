@@ -121,16 +121,19 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 				return err
 			}
 		}
+		var errs []error
 		if enabling {
 			if err := a.enableAutoUpdate(ctx); err != nil {
-				return err
+				errs = append(errs, err)
 			}
 		}
 		fmt.Fprintf(a.Out, "%s: already on %s\n", rs.Unit, rs.Version)
+		// The setting is saved: announce it even if the timer failed, or a
+		// rerun (which finds it already on) would never announce it.
 		if toggled != "" {
-			return a.announceAutoUpdate(ctx, rs.Unit, rs.Channel, toggled)
+			errs = append(errs, a.announceAutoUpdate(ctx, rs.Unit, rs.Channel, toggled))
 		}
-		return nil
+		return errors.Join(errs...)
 	}
 
 	old := rs.PrevVersion
@@ -156,7 +159,6 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 	if enabling {
 		if err := a.enableAutoUpdate(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("update of %s succeeded but turning on auto-update failed (rerun with --auto-update): %w", rs.Unit, err))
-			toggled = ""
 		}
 	}
 	if outcome == swapped {

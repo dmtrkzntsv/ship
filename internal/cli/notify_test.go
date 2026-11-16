@@ -22,9 +22,16 @@ func TestNotifyTest(t *testing.T) {
 	assert.Contains(t, err.Error(), "try: sudo ship notify test")
 
 	env.cfg.Notify.URL = "ntfy://ntfy.sh/topic"
-	out, _, err := runCLI(t, "notify", "test")
+	out, errOut, err := runCLI(t, "notify", "test")
 	require.NoError(t, err)
 	assert.Equal(t, "test notification sent\n", out)
+	assert.Contains(t, errOut, "not root, so this tested your own settings")
+
+	isRoot = func() bool { return true }
+	out, errOut, err = runCLI(t, "notify", "test")
+	require.NoError(t, err)
+	assert.Equal(t, "test notification sent\n", out)
+	assert.Empty(t, errOut)
 
 	_, _, err = runCLI(t, "notify", "test", "extra")
 	assert.Error(t, err)

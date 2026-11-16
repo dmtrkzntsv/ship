@@ -122,8 +122,9 @@ func (a *App) Install(ctx context.Context, args InstallArgs) error {
 	ph := a.Host.Paths.Placeholders(service, ref, unit)
 	fmt.Fprintf(a.Out, "installed %s %s into service %s as %s.service (enabled, not started)\n", ref, f.Release.Version, service, unit)
 	fmt.Fprintf(a.Out, "next: edit %s, then run: ship start %s --service %s\n", ph.EnvFile, ref, service)
-	if args.AutoUpdate && timerErr == nil {
-		return a.announceAutoUpdate(ctx, unit, args.Version, "on")
+	if args.AutoUpdate {
+		// Saved as on even if the timer failed, so announce it either way.
+		return errors.Join(timerErr, a.announceAutoUpdate(ctx, unit, args.Version, "on"))
 	}
 	return timerErr
 }

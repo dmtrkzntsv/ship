@@ -82,7 +82,7 @@ func TestUpdateAutoUpdateTimerFailureAfterRealUpdate(t *testing.T) {
 	err := e.app.Update(context.Background(), app.UpdateArgs{Ref: "econumo", Service: "econumo-beta", AutoUpdate: ptr(true)})
 	require.ErrorIs(t, err, assert.AnError)
 	assert.Contains(t, err.Error(), "update of econumo-beta succeeded but turning on auto-update failed (rerun with --auto-update)")
-	assert.Equal(t, "econumo-beta: 1.4.0 -> 1.5.0\n", e.out.String())
+	assert.Equal(t, "econumo-beta: 1.4.0 -> 1.5.0\neconumo-beta: auto-update on\n", e.out.String())
 	assert.Equal(t, "1.5.0", e.state(t).Services["econumo-beta"].Refs["econumo"].Version)
 }
 
