@@ -207,9 +207,12 @@ shows the setting in the `AUTO` column: `on`, `-` (off) or `stopped`.
 
 Turning it on writes and enables `ship-auto-update.timer`, which runs
 `ship-auto-update.service` (`ship update --auto`) 2 minutes after boot and then
-every 5 minutes, with up to a minute of random delay. A run walks every ref that
-has auto-update on, and prints nothing for refs that are up to date. The units
-stay when the last ref turns auto-update off. To change the interval:
+every 5 minutes, with up to a minute of random delay; a run may take up to 30
+minutes. A run walks every ref that has auto-update on, and prints nothing for
+refs that are up to date. A ref whose unit is not running (installed and not
+started yet, or stopped with `ship stop`) is skipped, so an update never starts
+a service; it is picked up again once it runs. The units stay when the last ref
+turns auto-update off. To change the interval:
 
 ```sh
 sudo systemctl edit ship-auto-update.timer
@@ -220,6 +223,15 @@ sudo systemctl edit ship-auto-update.timer
 
 Run output is in the journal: `journalctl -u ship-auto-update`. The run exits
 non-zero when a ref failed, so `systemctl status ship-auto-update` shows it.
+
+The timer's runs read their settings only from `/etc/ship/config.toml`: R2
+credentials or a notification URL exported in your shell (`SHIP_R2_*`,
+`SHIP_NOTIFY_URL`, ...) do not reach them. Turning auto-update on warns about
+each `SHIP_*` variable set in the shell; put those settings in the file.
+
+While a run holds the state lock, `ship install`, `update`, `rollback`,
+`uninstall` and `self-update` wait for it to finish (up to 2 minutes, printing
+`waiting for another ship run to finish…`) instead of failing.
 
 A failed automatic update (the health check fails, or the build is broken) stops
 auto-update on that ref, after the previous version is restored: `AUTO` shows
@@ -240,13 +252,17 @@ Only automatic updates notify; manual commands never do. Set one URL in
 url = "telegram://<bot_token>@telegram?chats=<chat_id>"
 ```
 
-Every message starts with the host name. There are five kinds:
+Every message starts with the host name. There are six kinds:
 
 - updated: `homelab: econumo (dev) 2026-11-15T10:02 → 2026-11-16T09:40`;
 - failed: `homelab: econumo (dev) build X failed, still on Y; auto-update stopped`,
   with the error and the journal lines the health check collected;
 - down: `homelab: econumo is DOWN — update to X failed and rollback to Y failed;
   auto-update stopped`, with the journal lines;
+- not saved: `homelab: econumo (dev) updated to X but the state could not be
+  saved; automatic updates halted`, when the update worked but `state.json`
+  could not be written. The run stops there; the next one finds X already
+  installed and only records it (no restart, rollback target kept);
 - can't check: `homelab: can't check econumo (dev) for updates since 14:02: <error>`,
   sent when R2 or the network has been failing for an hour, repeated every 24
   hours (`still can't check ...`), and followed by `... reachable again, was
