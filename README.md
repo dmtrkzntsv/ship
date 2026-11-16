@@ -211,8 +211,11 @@ every 5 minutes, with up to a minute of random delay; a run may take up to 30
 minutes. A run walks every ref that has auto-update on, and prints nothing for
 refs that are up to date. A ref whose unit is not running (installed and not
 started yet, or stopped with `ship stop`) is skipped, so an update never starts
-a service; it is picked up again once it runs. The units stay when the last ref
-turns auto-update off. To change the interval:
+a service; it is picked up again once it runs. If systemd cannot be asked
+whether the unit runs, the ref counts as "can't check" (see below). The units
+stay when the last ref turns auto-update off. They are named
+`ship-auto-update.service` and `.timer`; ship refuses to overwrite files of
+those names that are not its own, and never gives a service that name. To change the interval:
 
 ```sh
 sudo systemctl edit ship-auto-update.timer
@@ -230,8 +233,10 @@ credentials or a notification URL exported in your shell (`SHIP_R2_*`,
 each `SHIP_*` variable set in the shell; put those settings in the file.
 
 While a run holds the state lock, `ship install`, `update`, `rollback`,
-`uninstall` and `self-update` wait for it to finish (up to 2 minutes, printing
-`waiting for another ship run to finish…`) instead of failing.
+`uninstall`, `start`, `stop`, `restart` and `self-update` wait for it to finish
+(up to 2 minutes, printing `waiting for another ship run to finish…`; Ctrl-C
+stops the wait) instead of failing. They hold the lock while they work, so a run
+never restarts a unit you are stopping.
 
 A failed automatic update (the health check fails, or the build is broken) stops
 auto-update on that ref, after the previous version is restored: `AUTO` shows
@@ -261,8 +266,12 @@ Every message starts with the host name. There are six kinds:
   auto-update stopped`, with the journal lines;
 - not saved: `homelab: econumo (dev) updated to X but the state could not be
   saved; automatic updates halted`, when the update worked but `state.json`
-  could not be written. The run stops there; the next one finds X already
-  installed and only records it (no restart, rollback target kept);
+  could not be written. The run stops there and remembers the update as
+  pending in `/var/lib/ship/auto-update.json`. The next run, or a manual
+  `ship update` of that ref, finds X installed as remembered and only records
+  it (no restart, rollback target kept). While the state still cannot be
+  saved, later runs say so in the journal, not in another message. Without
+  such a record, an update always installs, restarts and health-checks;
 - can't check: `homelab: can't check econumo (dev) for updates since 14:02: <error>`,
   sent when R2 or the network has been failing for an hour, repeated every 24
   hours (`still can't check ...`), and followed by `... reachable again, was
