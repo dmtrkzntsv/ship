@@ -262,8 +262,9 @@ Every message starts with the host name. There are six kinds:
 - updated: `homelab: econumo (dev) 2026-11-15T10:02 → 2026-11-16T09:40`;
 - failed: `homelab: econumo (dev) build X failed, still on Y; auto-update stopped`,
   with the error and the journal lines the health check collected. A checksum
-  mismatch while a publish is landing (`SHA256SUMS` changed during the
-  download) is not a failed build: the next run tries again;
+  mismatch is only treated as a failed build when it repeats on the next run
+  against the same `SHA256SUMS`; until then it counts as "can't check", since
+  a run can overlap a publish;
 - down: `homelab: econumo is DOWN — update to X failed and rollback to Y failed;
   auto-update stopped`, with the journal lines;
 - not saved: `homelab: econumo (dev) updated to X but the state could not be

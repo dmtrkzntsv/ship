@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"time"
 
@@ -30,6 +31,84 @@ type runClock struct {
 	NotifiedAt   time.Time     `json:"notified_at,omitzero"`
 	Reason       string        `json:"reason,omitempty"`
 	Pending      pendingRecord `json:"pending,omitzero"`
+	// Suspects are refs whose last fetch failed a checksum check; only the
+	// same failure against the same SHA256SUMS on the next run is real.
+	Suspects []suspectRecord `json:"suspects,omitempty"`
+}
+
+// suspectRecord is a checksum mismatch seen once: the ref and the hash of
+// the SHA256SUMS it was checked against.
+type suspectRecord struct {
+	Service  string `json:"service"`
+	Ref      string `json:"ref"`
+	SumsHash string `json:"sums_hash"`
+}
+
+// changeRunClock runs change on the run clock file under its lock and saves
+// it when change reports a change; an unreadable file starts over.
+func (a *App) changeRunClock(change func(c *runClock) bool) error {
+	if a.RunClockPath == "" {
+		return errors.New("no run clock file")
+	}
+	unlock, err := lockRunClock(a.RunClockPath)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	c, err := loadRunClock(a.RunClockPath)
+	if err != nil {
+		c = runClock{}
+	}
+	if !change(&c) {
+		return nil
+	}
+	return c.save(a.RunClockPath)
+}
+
+// observeMismatch records a checksum mismatch of refKey in service against
+// the SHA256SUMS hashed sumsHash. repeat reports that the previous run saw
+// the same mismatch against the same sums (the suspect is then dropped):
+// the build is bad. Otherwise the ref becomes (or stays) a suspect.
+func (a *App) observeMismatch(service, refKey, sumsHash string) (repeat bool, err error) {
+	err = a.changeRunClock(func(c *runClock) bool {
+		for i, s := range c.Suspects {
+			if s.Service != service || s.Ref != refKey {
+				continue
+			}
+			if s.SumsHash == sumsHash {
+				repeat = true
+				c.Suspects = append(c.Suspects[:i], c.Suspects[i+1:]...)
+			} else {
+				c.Suspects[i].SumsHash = sumsHash
+			}
+			return true
+		}
+		c.Suspects = append(c.Suspects, suspectRecord{service, refKey, sumsHash})
+		return true
+	})
+	return repeat, err
+}
+
+// clearSuspect drops refKey's suspect after a fetch of it worked.
+func (a *App) clearSuspect(service, refKey string) {
+	if a.RunClockPath == "" {
+		return
+	}
+	if c, err := loadRunClock(a.RunClockPath); err != nil || !slices.ContainsFunc(c.Suspects, func(s suspectRecord) bool {
+		return s.Service == service && s.Ref == refKey
+	}) {
+		return // nothing to clear: no lock needed
+	}
+	err := a.changeRunClock(func(c *runClock) bool {
+		n := len(c.Suspects)
+		c.Suspects = slices.DeleteFunc(c.Suspects, func(s suspectRecord) bool {
+			return s.Service == service && s.Ref == refKey
+		})
+		return len(c.Suspects) != n
+	})
+	if err != nil {
+		fmt.Fprintf(a.Err, "warning: %v\n", err)
+	}
 }
 
 // pendingRecord is what an update that swapped a ref's build on the host

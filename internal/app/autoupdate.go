@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -252,9 +253,6 @@ func (r *autoRun) update(s *state.State, st store.Store, t autoTarget) error {
 	}
 	r.refs++
 	before, old := *rs, rs.Version
-	if p := a.pending(); p.Service == t.service && p.Ref == t.key {
-		old = p.Version // what the host runs: a swap whose save failed
-	}
 	var (
 		rel     release.Release
 		outcome updateOutcome
@@ -273,9 +271,29 @@ func (r *autoRun) update(s *state.State, st store.Store, t autoTarget) error {
 		r.skip(s, rs)
 		return nil
 	}
+	// What the host runs: the state's build, unless an unsaved swap of a
+	// build other than the fetched one is pending (as updateRef decides).
+	if p := a.pending(); p.Service == t.service && p.Ref == t.key && rel.Version != "" && !p.matches(t.service, t.key, rel) {
+		old = p.Version
+	}
 	// A command killed by the interrupt fails with its own error (signal:
 	// killed), not context.Canceled.
 	interrupted := err != nil && (errors.Is(err, context.Canceled) || r.ctx.Err() != nil)
+	// A checksum mismatch may be a publish landing mid-fetch: it is a bad
+	// build only when the next run sees it again against the same sums.
+	suspect := false
+	var mm *release.MismatchError
+	if err != nil && !interrupted && errors.As(err, &mm) {
+		repeat, serr := a.observeMismatch(t.service, t.key, mm.SumsHash)
+		if serr != nil {
+			fmt.Fprintf(a.Err, "warning: %v\n", serr)
+		}
+		suspect = !repeat
+	}
+	var he hostError
+	if err == nil || errors.As(err, &he) { // the fetch worked
+		a.clearSuspect(t.service, t.key)
+	}
 	what := fmt.Sprintf("%s (%s)", rs.Unit, rs.Channel)
 	var (
 		msgs    []notify.Message
@@ -302,6 +320,10 @@ func (r *autoRun) update(s *state.State, st store.Store, t autoTarget) error {
 		// The host restored the previous pair: auto-update stays on, quietly.
 		fmt.Fprintf(a.Err, "%s: %v\n", rs.Unit, err)
 		return err
+	case suspect:
+		failed = true
+		fmt.Fprintf(a.Err, "%s: checksum mismatch, checking again next run\n", rs.Unit)
+		msgs = r.checkClock(rs, what, err)
 	case failedUpdate(err):
 		failed = true
 		stopAutoUpdate(rs, r.now)
@@ -435,8 +457,8 @@ func (r *autoRun) observeRun(reason string) {
 	c := failClock{Since: prev.FailingSince, Notified: prev.NotifiedAt}
 	since := c.Since
 	ev := c.observe(r.now, reason != "")
-	next := runClock{FailingSince: c.Since, NotifiedAt: c.Notified, Reason: reason, Pending: prev.Pending}
-	if next != prev || broken {
+	next := runClock{FailingSince: c.Since, NotifiedAt: c.Notified, Reason: reason, Pending: prev.Pending, Suspects: prev.Suspects}
+	if !sameClock(next, prev) || broken {
 		if err := next.save(path); err != nil {
 			fmt.Fprintf(r.a.Err, "warning: %v\n", err)
 			r.clockUnsaved = true
@@ -451,6 +473,12 @@ func (r *autoRun) observeRun(reason string) {
 	case clockRecovered:
 		r.notify(notify.Message{Title: fmt.Sprintf("automatic updates running again, were failing since %s (%s)", clockTime(since), minutes(r.now.Sub(since)))})
 	}
+}
+
+// sameClock reports whether two run clocks hold the same values.
+func sameClock(a, b runClock) bool {
+	return a.FailingSince.Equal(b.FailingSince) && a.NotifiedAt.Equal(b.NotifiedAt) &&
+		a.Reason == b.Reason && a.Pending == b.Pending && slices.Equal(a.Suspects, b.Suspects)
 }
 
 // resetRunClock starts the run clock over, silently, for a run with nothing

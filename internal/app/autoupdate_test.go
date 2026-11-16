@@ -17,6 +17,7 @@ import (
 	"github.com/dmtrkzntsv/ship/internal/app"
 	"github.com/dmtrkzntsv/ship/internal/host"
 	"github.com/dmtrkzntsv/ship/internal/notify"
+	"github.com/dmtrkzntsv/ship/internal/release"
 	"github.com/dmtrkzntsv/ship/internal/state"
 	"github.com/dmtrkzntsv/ship/internal/store"
 	"github.com/dmtrkzntsv/ship/internal/store/storetest"
@@ -345,6 +346,10 @@ func TestAutoUpdateBrokenBuildStops(t *testing.T) {
 	obj := f.store.Objects[key]
 	obj.Data = []byte("tampered")
 	f.store.Objects[key] = obj
+	// A mismatch counts only when the next run sees it against the same sums.
+	require.Error(t, f.app.AutoUpdate(ctx))
+	assert.Empty(t, f.n.got)
+	f.at(5 * time.Minute)
 
 	err := f.app.AutoUpdate(ctx)
 	require.Error(t, err)
@@ -356,14 +361,14 @@ func TestAutoUpdateBrokenBuildStops(t *testing.T) {
 	assert.Contains(t, f.errOut.String(), "checksum mismatch")
 	rs := f.ref(t, "econumo-beta")
 	assert.False(t, rs.AutoUpdate)
-	assert.True(t, rs.AutoUpdateStoppedAt.Equal(later))
+	assert.True(t, rs.AutoUpdateStoppedAt.Equal(later.Add(5*time.Minute)))
 	assert.Equal(t, "1.4.0", rs.Version)
 	assert.Equal(t, 0, restarts(f.sys.Calls, "econumo-beta"))
 
 	// A fixed build follows: the stopped ref is left alone, silently.
 	publish(t, f.store, "econumo", "1.6.0", []string{"dev"}, true, "econumo")
 	f.n.got = nil
-	f.at(5 * time.Minute)
+	f.at(10 * time.Minute)
 	require.NoError(t, f.app.AutoUpdate(ctx))
 	assert.Empty(t, f.n.got)
 	assert.Equal(t, "1.4.0", f.ref(t, "econumo-beta").Version)
@@ -1052,4 +1057,75 @@ func TestAutoUpdatePendingThenNewerBuild(t *testing.T) {
 	assert.Equal(t, "1.5.0", rs.PrevVersion, "PrevVersion names what .prev holds")
 	assert.Contains(t, readFile(t, f.app.Host.Paths.Bin("econumo-beta", "econumo")+".prev"), "1.5.0")
 	assert.NotContains(t, readFile(t, f.app.RunClockPath), `"pending"`)
+}
+
+// tamperBinary makes econumo's dev binary in the store not match its sums.
+func tamperBinary(f *autoFixture) {
+	key := "econumo/dev/econumo-linux-amd64"
+	obj := f.store.Objects[key]
+	obj.Data = []byte("tampered")
+	f.store.Objects[key] = obj
+}
+
+func TestAutoUpdateMismatchStopsOnlyWhenRepeated(t *testing.T) {
+	f := autoEnv(t)
+	ctx := context.Background()
+	tamperBinary(f)
+
+	err := f.app.AutoUpdate(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "1 of 1 refs failed")
+	assert.Empty(t, f.n.got)
+	assert.Contains(t, f.errOut.String(), "econumo-beta: checksum mismatch, checking again next run\n")
+	rs := f.ref(t, "econumo-beta")
+	assert.True(t, rs.AutoUpdate, "not stopped on a first mismatch")
+	assert.True(t, rs.CheckFailingSince.Equal(later), "counted as a failed check")
+	assert.Contains(t, readFile(t, f.app.RunClockPath), `"suspect`)
+
+	f.at(5 * time.Minute)
+	require.Error(t, f.app.AutoUpdate(ctx))
+	assert.Equal(t, []string{"econumo-beta (dev) build 1.5.0 failed, still on 1.4.0; auto-update stopped"}, f.n.titles())
+	rs = f.ref(t, "econumo-beta")
+	assert.False(t, rs.AutoUpdate)
+	assert.NotContains(t, readFile(t, f.app.RunClockPath), `"suspect`)
+	assert.Equal(t, 0, restarts(f.sys.Calls, "econumo-beta"))
+}
+
+func TestAutoUpdateMismatchThenConsistentChannelUpdates(t *testing.T) {
+	f := autoEnv(t)
+	ctx := context.Background()
+	tamperBinary(f)
+	require.Error(t, f.app.AutoUpdate(ctx))
+	assert.Contains(t, readFile(t, f.app.RunClockPath), `"suspect`)
+
+	// The publish finished: new sums, a good build.
+	publish(t, f.store, "econumo", "1.6.0", []string{"dev"}, true, "econumo")
+	f.at(5 * time.Minute)
+	require.NoError(t, f.app.AutoUpdate(ctx))
+	assert.Equal(t, []string{"econumo-beta (dev) 1.4.0 → 1.6.0"}, f.n.titles())
+	assert.True(t, f.ref(t, "econumo-beta").AutoUpdate)
+	assert.NotContains(t, readFile(t, f.app.RunClockPath), `"suspect`)
+}
+
+func TestManualUpdateMismatchFailsAtOnce(t *testing.T) {
+	e := installedEnv(t)
+	key := "econumo/dev/econumo-linux-amd64"
+	obj := e.store.Objects[key]
+	obj.Data = []byte("tampered")
+	e.store.Objects[key] = obj
+	err := e.app.Update(context.Background(), app.UpdateArgs{Ref: "econumo", Service: "econumo-beta"})
+	require.ErrorIs(t, err, release.ErrMismatch)
+}
+
+func TestAutoUpdateRevertedHostIsNotStillOnPending(t *testing.T) {
+	f := autoEnv(t)
+	ctx := context.Background()
+	// A pending record for 1.5.0 while the host runs 1.4.0 again; 1.5.0's
+	// build is then found broken (its unit does not verify).
+	pending := `{"pending":{"service":"econumo-beta","ref":"econumo","version":"1.5.0","published_at":"` + fixedNow.Format(time.RFC3339) + `"}}`
+	require.NoError(t, os.WriteFile(f.app.RunClockPath, []byte(pending), 0o600))
+	f.sys.VerifyErr = errors.New("bad unit")
+
+	require.Error(t, f.app.AutoUpdate(ctx))
+	assert.Equal(t, []string{"econumo-beta (dev) build 1.5.0 failed, still on 1.4.0; auto-update stopped"}, f.n.titles())
 }
