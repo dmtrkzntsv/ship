@@ -44,7 +44,7 @@ func (a *App) Install(ctx context.Context, args InstallArgs) error {
 		}
 	}
 
-	unlock, err := a.LockState()
+	unlock, err := a.LockState(ctx)
 	if err != nil {
 		return err
 	}

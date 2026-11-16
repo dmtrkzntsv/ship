@@ -31,7 +31,7 @@ func (a *App) Uninstall(ctx context.Context, args UninstallArgs) error {
 			return err
 		}
 	}
-	unlock, err := a.LockState()
+	unlock, err := a.LockState(ctx)
 	if err != nil {
 		return err
 	}
@@ -74,7 +74,9 @@ func (a *App) Uninstall(ctx context.Context, args UninstallArgs) error {
 }
 
 // Lifecycle runs action ("start", "stop" or "restart") on an installed
-// ref's unit; start and restart wait for the unit to stay up.
+// ref's unit; start and restart wait for the unit to stay up. It holds the
+// state lock throughout, so an automatic run cannot act on the unit
+// between its check and the change (ship stop, then a restart by the run).
 func (a *App) Lifecycle(ctx context.Context, action, refArg, serviceArg string) error {
 	var run func(context.Context, string) error
 	switch action {
@@ -87,6 +89,14 @@ func (a *App) Lifecycle(ctx context.Context, action, refArg, serviceArg string) 
 	default:
 		return fmt.Errorf("unknown action %q: want start, stop or restart", action)
 	}
+	if _, _, err := refService(refArg, serviceArg); err != nil {
+		return err
+	}
+	unlock, err := a.LockState(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	rs, _, _, err := a.lookup(refArg, serviceArg)
 	if err != nil {
 		return err

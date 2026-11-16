@@ -33,9 +33,20 @@ func newSelfUpdateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if version != "" {
+				if err := layout.ValidateChannel(version); err != nil {
+					return err
+				}
+			}
+			// Held from before the binary is replaced through the state
+			// save, so no ship run (the auto-update timer) runs in between.
+			unlock, err := a.LockState(cmd.Context())
+			if err != nil {
+				return err
+			}
+			defer unlock()
 			channel := version
 			if channel == "" {
-				// Reading state needs no root as long as the file is readable.
 				channel = "latest"
 				st, err := a.State.Load()
 				switch {
@@ -44,8 +55,6 @@ func newSelfUpdateCmd() *cobra.Command {
 				case st.SelfChannel != "":
 					channel = st.SelfChannel
 				}
-			} else if err := layout.ValidateChannel(channel); err != nil {
-				return err
 			}
 			store, err := a.NewStore()
 			if err != nil {
@@ -57,11 +66,6 @@ func newSelfUpdateCmd() *cobra.Command {
 			if version == "" {
 				return nil
 			}
-			unlock, err := a.LockState()
-			if err != nil {
-				return fmt.Errorf("updated, but could not remember channel %q: %w", channel, err)
-			}
-			defer unlock()
 			st, err := a.State.Load()
 			if err != nil {
 				return err

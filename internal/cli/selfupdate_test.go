@@ -151,10 +151,11 @@ func TestSelfUpdateErrors(t *testing.T) {
 		unlock, err := env.state.Lock()
 		require.NoError(t, err)
 		defer unlock()
-		_, _, err = runCLI(t, "self-update", "--version", "dev")
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), `updated, but could not remember channel "dev"`)
-		assert.Equal(t, "dev-binary", readFile(t, exe))
+		for _, args := range [][]string{{"self-update", "--version", "dev"}, {"self-update"}} {
+			_, _, err = runCLI(t, args...)
+			require.ErrorIs(t, err, state.ErrLocked, "%v", args)
+			assert.Equal(t, "old-binary", readFile(t, exe), "nothing is replaced without the lock")
+		}
 	})
 	t.Run("state unreadable", func(t *testing.T) {
 		env, _ := selfUpdateEnv(t)

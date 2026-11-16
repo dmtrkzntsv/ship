@@ -3,6 +3,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -54,8 +55,8 @@ const interactiveLockWait = 2 * time.Minute
 // LockState takes the state lock for an interactive command, waiting up to
 // LockWait for another ship run to finish (saying so once on Err).
 // ship update --auto never waits: it uses State.Lock.
-func (a *App) LockState() (unlock func(), err error) {
-	return a.State.LockWait(a.LockWait, func() {
+func (a *App) LockState(ctx context.Context) (unlock func(), err error) {
+	return a.State.LockWait(ctx, a.LockWait, func() {
 		fmt.Fprintln(a.Err, "waiting for another ship run to finish\u2026")
 	})
 }

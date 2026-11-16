@@ -54,7 +54,7 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 		}
 	}
 
-	unlock, err := a.LockState()
+	unlock, err := a.LockState(ctx)
 	if err != nil {
 		return err
 	}
@@ -231,7 +231,7 @@ func (a *App) Rollback(ctx context.Context, refArg, serviceArg string) error {
 		return err
 	}
 
-	unlock, err := a.LockState()
+	unlock, err := a.LockState(ctx)
 	if err != nil {
 		return err
 	}

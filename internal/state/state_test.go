@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,7 +83,7 @@ func TestLockExclusive(t *testing.T) {
 
 func TestLockWaitFree(t *testing.T) {
 	f := File{Path: filepath.Join(t.TempDir(), "state.json")}
-	unlock, err := f.LockWait(time.Minute, func() { t.Fatal("must not wait for a free lock") })
+	unlock, err := f.LockWait(context.Background(), time.Minute, func() { t.Fatal("must not wait for a free lock") })
 	require.NoError(t, err)
 	unlock()
 }
@@ -95,13 +96,13 @@ func TestLockWaitTimesOut(t *testing.T) {
 
 	waits := 0
 	start := time.Now()
-	_, err = f.LockWait(150*time.Millisecond, func() { waits++ })
+	_, err = f.LockWait(context.Background(), 150*time.Millisecond, func() { waits++ })
 	require.ErrorIs(t, err, ErrLocked)
 	assert.Equal(t, 1, waits)
 	assert.GreaterOrEqual(t, time.Since(start), 150*time.Millisecond)
 
 	// No timeout: one try, no wait.
-	_, err = f.LockWait(0, func() { t.Fatal("must not wait") })
+	_, err = f.LockWait(context.Background(), 0, func() { t.Fatal("must not wait") })
 	require.ErrorIs(t, err, ErrLocked)
 }
 
@@ -112,7 +113,7 @@ func TestLockWaitGetsReleasedLock(t *testing.T) {
 	time.AfterFunc(100*time.Millisecond, unlock)
 
 	waits := 0
-	unlock2, err := f.LockWait(10*time.Second, func() { waits++ })
+	unlock2, err := f.LockWait(context.Background(), 10*time.Second, func() { waits++ })
 	require.NoError(t, err)
 	assert.Equal(t, 1, waits)
 	_, err = f.Lock()
@@ -120,10 +121,23 @@ func TestLockWaitGetsReleasedLock(t *testing.T) {
 	unlock2()
 }
 
+func TestLockWaitCancelled(t *testing.T) {
+	f := File{Path: filepath.Join(t.TempDir(), "state.json")}
+	unlock, err := f.Lock()
+	require.NoError(t, err)
+	defer unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancel)
+	start := time.Now()
+	_, err = f.LockWait(ctx, time.Minute, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Less(t, time.Since(start), 5*time.Second)
+}
+
 func TestLockWaitOpenError(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "state.lock"), 0o755))
-	_, err := File{Path: filepath.Join(dir, "state.json")}.LockWait(time.Second, nil)
+	_, err := File{Path: filepath.Join(dir, "state.json")}.LockWait(context.Background(), time.Second, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "open lock")
 }

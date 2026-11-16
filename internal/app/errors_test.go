@@ -113,6 +113,8 @@ func TestInteractiveCommandsWaitForLock(t *testing.T) {
 		},
 		"update":   func(a *app.App) error { return a.Update(ctx, app.UpdateArgs{Ref: "econumo", Service: "econumo-beta"}) },
 		"rollback": func(a *app.App) error { return a.Rollback(ctx, "econumo", "econumo-beta") },
+		"stop":     func(a *app.App) error { return a.Lifecycle(ctx, "stop", "econumo", "econumo-beta") },
+		"start":    func(a *app.App) error { return a.Lifecycle(ctx, "start", "econumo", "econumo-beta") },
 	}
 	for name, run := range cmds {
 		t.Run(name, func(t *testing.T) {
@@ -141,6 +143,19 @@ func TestInteractiveLockWaitTimesOut(t *testing.T) {
 	defer unlock()
 	err = e.app.Update(context.Background(), app.UpdateArgs{Ref: "econumo", Service: "econumo-beta"})
 	require.ErrorIs(t, err, state.ErrLocked)
+	assert.Empty(t, e.sys.Calls)
+}
+
+func TestInteractiveLockWaitCancelled(t *testing.T) {
+	e := installedEnv(t)
+	e.app.LockWait = time.Minute
+	unlock, err := e.app.State.Lock()
+	require.NoError(t, err)
+	defer unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancel)
+	err = e.app.Lifecycle(ctx, "stop", "econumo", "econumo-beta")
+	require.ErrorIs(t, err, context.Canceled)
 	assert.Empty(t, e.sys.Calls)
 }
 
