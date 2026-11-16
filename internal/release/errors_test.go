@@ -341,3 +341,32 @@ func TestFetchSumsUnchangedMismatchIsBadBuild(t *testing.T) {
 	require.ErrorIs(t, err, release.ErrBadBuild)
 	assert.Equal(t, 2, st.reads, "SHA256SUMS was read again to tell")
 }
+
+func TestFetchMismatchCarriesSumsHash(t *testing.T) {
+	for _, tamper := range []string{"econumo/latest/econumo-linux-amd64", "econumo/latest/release.json", "econumo/latest/econumo.service"} {
+		t.Run(filepath.Base(tamper), func(t *testing.T) {
+			st := publishFixture(t, "econumo", "econumo-linux-amd64", "econumo-linux-arm64", "econumo.service")
+			o := st.Objects[tamper]
+			o.Data = append([]byte("x"), o.Data...)
+			st.Objects[tamper] = o
+			_, err := release.Fetch(context.Background(), st, layout.Ref{Project: "econumo"}, "latest", "amd64", t.TempDir())
+			require.ErrorIs(t, err, release.ErrMismatch)
+			require.ErrorIs(t, err, release.ErrBadBuild)
+			var mm *release.MismatchError
+			require.ErrorAs(t, err, &mm)
+			assert.Equal(t, hexSum(st.Objects["econumo/latest/SHA256SUMS"].Data), mm.SumsHash)
+			assert.Contains(t, err.Error(), "checksum mismatch")
+		})
+	}
+}
+
+func TestFetchStructuralBadBuildIsNotMismatch(t *testing.T) {
+	st := publishFixture(t, "econumo", "econumo-linux-amd64", "econumo-linux-arm64", "econumo.service")
+	_, err := release.Fetch(context.Background(), st, layout.Ref{Project: "econumo"}, "latest", "arm", t.TempDir())
+	require.ErrorIs(t, err, release.ErrBadBuild)
+	assert.NotErrorIs(t, err, release.ErrMismatch)
+	replaceReleaseJSON(t, st, "econumo", []byte(`{"project":"other","version":"v1"}`))
+	_, err = release.Fetch(context.Background(), st, layout.Ref{Project: "econumo"}, "latest", "amd64", t.TempDir())
+	require.ErrorIs(t, err, release.ErrBadBuild)
+	assert.NotErrorIs(t, err, release.ErrMismatch)
+}

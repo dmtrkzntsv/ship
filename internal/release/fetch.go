@@ -3,6 +3,8 @@ package release
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,6 +35,22 @@ var ErrNoUnit = errors.New("project publishes no systemd unit")
 // wrong (missing asset or arch, checksum mismatch, malformed or foreign
 // metadata), as opposed to the store being unreachable or the channel absent.
 var ErrBadBuild = errors.New("bad build")
+
+// ErrMismatch marks a bad build whose files do not match SHA256SUMS (a
+// checksum mismatch or a file not listed). Such a fetch can also be a
+// publish landing in between, which a later fetch tells apart.
+var ErrMismatch = errors.New("checksum mismatch")
+
+// MismatchError is a verification failure against SHA256SUMS; SumsHash is
+// the hex SHA-256 of the SHA256SUMS bytes the files were checked against.
+// errors.Is matches both ErrMismatch and ErrBadBuild.
+type MismatchError struct {
+	Err      error
+	SumsHash string
+}
+
+func (e *MismatchError) Error() string   { return e.Err.Error() }
+func (e *MismatchError) Unwrap() []error { return []error{e.Err, ErrMismatch, ErrBadBuild} }
 
 // badBuild keeps err's text and makes errors.Is(.., ErrBadBuild) true.
 func badBuild(err error) error { return classified{err} }
@@ -94,7 +112,8 @@ func Fetch(ctx context.Context, st store.Store, ref layout.Ref, channel, arch, d
 		case !bytes.Equal(now, sumsRaw):
 			return fmt.Errorf("%s%s changed during the download; try again", prefix, SumsFile)
 		}
-		return badBuild(verr)
+		h := sha256.Sum256(sumsRaw)
+		return &MismatchError{Err: verr, SumsHash: hex.EncodeToString(h[:])}
 	}
 
 	f := Fetched{Dir: dir}
