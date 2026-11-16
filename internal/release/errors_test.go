@@ -184,35 +184,36 @@ func TestFetchBadBuildErrors(t *testing.T) {
 		name string
 		arch string
 		ref  layout.Ref
+		want string // part of the original message that must survive
 		set  func(t *testing.T) *storetest.Mem
 	}{
-		{"checksum mismatch", "amd64", layout.Ref{Project: "econumo"}, func(t *testing.T) *storetest.Mem {
+		{"checksum mismatch", "amd64", layout.Ref{Project: "econumo"}, "checksum mismatch", func(t *testing.T) *storetest.Mem {
 			st := econumo(t)
 			o := st.Objects["econumo/latest/econumo-linux-amd64"]
 			o.Data = append([]byte("x"), o.Data...)
 			st.Objects["econumo/latest/econumo-linux-amd64"] = o
 			return st
 		}},
-		{"tampered release.json", "amd64", layout.Ref{Project: "econumo"}, func(t *testing.T) *storetest.Mem {
+		{"tampered release.json", "amd64", layout.Ref{Project: "econumo"}, "checksum mismatch", func(t *testing.T) *storetest.Mem {
 			st := econumo(t)
 			o := st.Objects["econumo/latest/release.json"]
 			o.Data = append([]byte(" "), o.Data...)
 			st.Objects["econumo/latest/release.json"] = o
 			return st
 		}},
-		{"no arch", "arm", layout.Ref{Project: "econumo"}, econumo},
-		{"no asset", "amd64", layout.Ref{Project: "econumo", Component: "agent"}, econumo},
-		{"wrong project", "amd64", layout.Ref{Project: "econumo"}, func(t *testing.T) *storetest.Mem {
+		{"no arch", "arm", layout.Ref{Project: "econumo"}, "no linux/arm build", econumo},
+		{"no asset", "amd64", layout.Ref{Project: "econumo", Component: "agent"}, "no asset \"econumo-agent\"", econumo},
+		{"wrong project", "amd64", layout.Ref{Project: "econumo"}, "names project \"other\"", func(t *testing.T) *storetest.Mem {
 			st := econumo(t)
 			replaceReleaseJSON(t, st, "econumo", []byte(`{"project":"other","version":"v1","published_at":"2026-10-29T12:00:00Z"}`))
 			return st
 		}},
-		{"malformed release.json", "amd64", layout.Ref{Project: "econumo"}, func(t *testing.T) *storetest.Mem {
+		{"malformed release.json", "amd64", layout.Ref{Project: "econumo"}, "release.json", func(t *testing.T) *storetest.Mem {
 			st := econumo(t)
 			replaceReleaseJSON(t, st, "econumo", []byte("not json"))
 			return st
 		}},
-		{"malformed SHA256SUMS", "amd64", layout.Ref{Project: "econumo"}, func(t *testing.T) *storetest.Mem {
+		{"malformed SHA256SUMS", "amd64", layout.Ref{Project: "econumo"}, "malformed", func(t *testing.T) *storetest.Mem {
 			st := econumo(t)
 			o := st.Objects["econumo/latest/SHA256SUMS"]
 			o.Data = []byte("garbage\n")
@@ -225,7 +226,7 @@ func TestFetchBadBuildErrors(t *testing.T) {
 			_, err := release.Fetch(context.Background(), tc.set(t), tc.ref, "latest", tc.arch, dir)
 			require.Error(t, err)
 			assert.ErrorIs(t, err, release.ErrBadBuild)
-			assert.NotEqual(t, release.ErrBadBuild.Error(), err.Error(), "the original text is kept")
+			assert.ErrorContains(t, err, tc.want, "the original text is kept")
 			assert.Empty(t, dirFiles(t, dir))
 		})
 	}

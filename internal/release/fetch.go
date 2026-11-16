@@ -135,14 +135,14 @@ func download(ctx context.Context, st store.Store, key, path string, mode os.Fil
 	}
 	src := &errTrackingReader{r: io.TeeReader(body, out)}
 	verr := sm.Verify(name, src)
-	if cerr := out.Close(); verr == nil {
-		verr = cerr
-	}
-	if verr != nil {
-		if src.err != nil {
-			return verr // the store or the disk failed mid-transfer; the build is not at fault
-		}
+	cerr := out.Close()
+	switch {
+	case src.err != nil:
+		return verr // the store or the disk failed mid-transfer; the build is not at fault
+	case verr != nil:
 		return badBuild(verr)
+	case cerr != nil:
+		return cerr // a local write error on close is not the build's fault either
 	}
 	return os.Chmod(path, mode) // OpenFile's mode is subject to umask
 }
