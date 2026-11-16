@@ -61,6 +61,11 @@ func TestNewWiresHost(t *testing.T) {
 	assert.Equal(t, 10*time.Second, a.Host.HealthWait)
 	assert.Equal(t, time.Second, a.Host.HealthTick)
 	assert.WithinDuration(t, time.Now(), a.Now(), time.Minute)
+	assert.Equal(t, 2*time.Minute, a.LockWait)
+	assert.NotNil(t, a.Environ)
+	shipPath, err := a.ShipPath()
+	require.NoError(t, err)
+	assert.True(t, filepath.IsAbs(shipPath))
 
 	cf := a.CF("tok")
 	assert.Equal(t, "tok", cf.Token)

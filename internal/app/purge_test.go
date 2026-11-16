@@ -2,6 +2,7 @@ package app_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -188,4 +189,25 @@ func TestUninstallPurgeNeedsZoneUpFront(t *testing.T) {
 	assert.Empty(t, e.sys.Calls)
 	assert.Empty(t, cf.paths)
 	assert.Contains(t, e.state(t).Services, "econumo-beta")
+}
+
+func TestUpdatePurgesEvenWhenTimerFails(t *testing.T) {
+	e := zonedEnv(t)
+	cf := withCF(t, e)
+	e.sys.EnableErr = errors.New("enable failed")
+	args := app.UpdateArgs{Ref: "econumo", Service: "econumo-beta", PurgeCache: true, AutoUpdate: ptr(true)}
+	err := e.app.Update(context.Background(), args)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "turning on auto-update failed")
+	assert.NotContains(t, err.Error(), "cache purge failed")
+	assert.Equal(t, []string{"/zones/z1/purge_cache"}, cf.paths)
+
+	// Both fail: both are reported.
+	publish(t, e.store, "econumo", "1.6.0", []string{"dev"}, true, "econumo")
+	cf.reply = `{"success":false,"errors":[{"message":"nope"}]}`
+	err = e.app.Update(context.Background(), args)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "turning on auto-update failed")
+	assert.Contains(t, err.Error(), "cache purge failed")
+	assert.Len(t, cf.paths, 2)
 }

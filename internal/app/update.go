@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/dmtrkzntsv/ship/internal/layout"
 	"github.com/dmtrkzntsv/ship/internal/release"
 	"github.com/dmtrkzntsv/ship/internal/state"
+	"github.com/dmtrkzntsv/ship/internal/store"
 )
 
 // UpdateArgs are the inputs of `ship update`. Service defaults to the ref's
@@ -20,6 +22,8 @@ import (
 type UpdateArgs struct {
 	Ref, Service, Version, CFZone string
 	PurgeCache                    bool
+	// AutoUpdate turns auto-update on or off for the ref; nil leaves it as is.
+	AutoUpdate *bool
 }
 
 // Update fetches the ref's channel and swaps it in on the host with a
@@ -43,7 +47,14 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 		}
 	}
 
-	unlock, err := a.State.Lock()
+	enabling := args.AutoUpdate != nil && *args.AutoUpdate
+	if enabling {
+		if _, err := a.checkAutoUpdate(); err != nil {
+			return err
+		}
+	}
+
+	unlock, err := a.LockState(ctx)
 	if err != nil {
 		return err
 	}
@@ -70,31 +81,38 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 	if err != nil {
 		return err
 	}
-	dir, err := os.MkdirTemp("", "ship-update-")
+	_, outcome, err := a.updateRef(ctx, st, ref, service, rs, channel, updateHooks{vet: func(rel release.Release) error {
+		autoOn := rs.AutoUpdate
+		if args.AutoUpdate != nil {
+			autoOn = *args.AutoUpdate
+		}
+		if autoOn && !isMoving(channel, rel) {
+			hint := ""
+			if !enabling {
+				hint = "; pass --auto-update=false to pin it"
+			}
+			return notMovingError(rs.Unit, channel, hint)
+		}
+		return nil
+	}})
 	if err != nil {
 		return err
-	}
-	defer os.RemoveAll(dir)
-	f, err := release.Fetch(ctx, st, ref, channel, a.Arch, dir)
-	if err != nil {
-		return err
-	}
-	if f.Unit == "" {
-		return noUnitError{ref}
 	}
 
-	// Re-installing the running release would only restart the unit and
-	// overwrite the rollback target with the same release. A channel-only
-	// publish keeps the channel name as its version, so the publish time
-	// must match too.
-	if f.Release.Version == rs.Version && f.Release.PublishedAt.Equal(rs.PublishedAt) {
+	if outcome == upToDate {
 		svc := s.Services[service]
-		if rs.Channel != channel || (args.CFZone != "" && svc.CFZone != args.CFZone) {
+		if rs.Channel != channel || (args.CFZone != "" && svc.CFZone != args.CFZone) || args.AutoUpdate != nil {
 			rs.Channel = channel
 			if args.CFZone != "" {
 				svc.CFZone = args.CFZone
 			}
+			applyAutoUpdate(rs, args.AutoUpdate)
 			if err := a.State.Save(s); err != nil {
+				return err
+			}
+		}
+		if enabling {
+			if err := a.enableAutoUpdate(ctx); err != nil {
 				return err
 			}
 		}
@@ -102,28 +120,142 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 		return nil
 	}
 
-	if err := a.Host.Update(ctx, host.Target{Service: service, Ref: ref, Unit: rs.Unit, Fetched: f}); err != nil {
-		return err
-	}
-
-	old := rs.Version
-	rs.Channel, rs.PrevVersion, rs.Version = channel, old, f.Release.Version
-	rs.PrevPublishedAt, rs.PublishedAt = rs.PublishedAt, f.Release.PublishedAt
-	rs.InstalledAt = a.Now().UTC()
+	old := rs.PrevVersion
+	applyAutoUpdate(rs, args.AutoUpdate)
 	zone := s.Services[service].CFZone
 	if args.CFZone != "" {
 		s.Services[service].CFZone, zone = args.CFZone, args.CFZone
 	}
 	if err := a.State.Save(s); err != nil {
-		return err
+		if outcome == swapped {
+			// Remembered so that the next update only records this build.
+			if _, perr := a.setPending(pendingFor(service, ref.String(), rs)); perr != nil {
+				err = errors.Join(err, fmt.Errorf("remember the update of %s: %w", rs.Unit, perr))
+			}
+		}
+		return fmt.Errorf("%s was updated to %s but the state could not be saved: %w", rs.Unit, rs.Version, err)
 	}
-	fmt.Fprintf(a.Out, "%s: %s -> %s%s\n", rs.Unit, old, rs.Version, republished(old, rs))
-	if args.PurgeCache {
-		if err := a.purgeCache(ctx, zone); err != nil {
-			return fmt.Errorf("update of %s succeeded (not rolled back) but the cache purge failed: %w", rs.Unit, err)
+	a.clearPending(service, ref.String())
+	if outcome == recorded {
+		fmt.Fprintf(a.Out, "%s: already installed %s, state recorded\n", rs.Unit, rs.Version)
+	}
+	var errs []error
+	if enabling {
+		if err := a.enableAutoUpdate(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("update of %s succeeded but turning on auto-update failed (rerun with --auto-update): %w", rs.Unit, err))
 		}
 	}
-	return nil
+	if outcome == swapped {
+		fmt.Fprintf(a.Out, "%s: %s -> %s%s\n", rs.Unit, old, rs.Version, republished(old, rs))
+	}
+	if args.PurgeCache {
+		if err := a.purgeCache(ctx, zone); err != nil {
+			errs = append(errs, fmt.Errorf("update of %s succeeded (not rolled back) but the cache purge failed: %w", rs.Unit, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// hostError marks a failure of the host stage of an update: the fetched
+// release was fine, but installing it failed. The host may have changed
+// files, so for auto-update it is a failed update, not a failed check.
+type hostError struct{ err error }
+
+func (e hostError) Error() string { return e.err.Error() }
+func (e hostError) Unwrap() error { return e.err }
+
+// updateOutcome is what updateRef did to a ref.
+type updateOutcome int
+
+const (
+	// upToDate: rs already runs the fetched build; nothing changed.
+	upToDate updateOutcome = iota
+	// swapped: the build was installed and restarted, and recorded in rs.
+	swapped
+	// recorded: an earlier update swapped the build in but could not save
+	// the state; it was only recorded in rs.
+	recorded
+)
+
+// updateHooks are the optional checks of updateRef.
+type updateHooks struct {
+	// vet can refuse the fetched release before the host is touched.
+	vet func(release.Release) error
+	// beforeSwap runs right before the host is changed; an error stops the
+	// update with nothing changed.
+	beforeSwap func() error
+}
+
+// updateRef fetches ref's channel and, unless rs already runs that build,
+// swaps it in on the host with a health check and records it in rs; the
+// caller saves the state. A build an earlier update swapped in without
+// saving the state (its pending record matches, and the files on disk are
+// that build) is only recorded. The fetched release is returned whenever
+// its metadata was read, even if the update then failed; failures of the
+// host stage are hostErrors.
+func (a *App) updateRef(ctx context.Context, st store.Store, ref layout.Ref, service string, rs *state.RefState, channel string, hooks updateHooks) (release.Release, updateOutcome, error) {
+	dir, err := os.MkdirTemp("", "ship-update-")
+	if err != nil {
+		return release.Release{}, upToDate, err
+	}
+	defer os.RemoveAll(dir)
+	f, err := release.Fetch(ctx, st, ref, channel, a.Arch, dir)
+	if err != nil {
+		return f.Release, upToDate, err
+	}
+	if f.Unit == "" {
+		return f.Release, upToDate, noUnitError{ref}
+	}
+	if hooks.vet != nil {
+		if err := hooks.vet(f.Release); err != nil {
+			return f.Release, upToDate, err
+		}
+	}
+
+	pending := a.pending()
+	pendingHere := pending.matches(service, ref.String(), f.Release)
+	// Re-installing the running release would only restart the unit and
+	// overwrite the rollback target with the same release. A channel-only
+	// publish keeps the channel name as its version, so the publish time
+	// must match too.
+	if f.Release.Version == rs.Version && f.Release.PublishedAt.Equal(rs.PublishedAt) {
+		if pendingHere {
+			a.clearPending(service, ref.String())
+		}
+		return f.Release, upToDate, nil
+	}
+
+	t := host.Target{Service: service, Ref: ref, Unit: rs.Unit, Fetched: f}
+	if pendingHere {
+		live, err := a.Host.Matches(t)
+		if err != nil {
+			return f.Release, upToDate, hostError{err}
+		}
+		if live {
+			rs.Channel, rs.Version, rs.PublishedAt = channel, pending.Version, pending.PublishedAt
+			rs.PrevVersion, rs.PrevPublishedAt = pending.PrevVersion, pending.PrevPublishedAt
+			rs.InstalledAt = a.Now().UTC()
+			return f.Release, recorded, nil
+		}
+	}
+	if hooks.beforeSwap != nil {
+		if err := hooks.beforeSwap(); err != nil {
+			return f.Release, upToDate, err
+		}
+	}
+	if err := a.Host.Update(ctx, t); err != nil {
+		return f.Release, upToDate, hostError{err}
+	}
+	// The build that became .prev: the state's, unless an earlier swap of
+	// this ref was not saved (its pending record names what ran).
+	curVersion, curPublished := rs.Version, rs.PublishedAt
+	if pending.Service == service && pending.Ref == ref.String() && !pendingHere {
+		curVersion, curPublished = pending.Version, pending.PublishedAt
+	}
+	rs.Channel, rs.PrevVersion, rs.Version = channel, curVersion, f.Release.Version
+	rs.PrevPublishedAt, rs.PublishedAt = curPublished, f.Release.PublishedAt
+	rs.InstalledAt = a.Now().UTC()
+	return f.Release, swapped, nil
 }
 
 // Rollback swaps the ref back to the binary and unit it ran before its last
@@ -134,7 +266,7 @@ func (a *App) Rollback(ctx context.Context, refArg, serviceArg string) error {
 		return err
 	}
 
-	unlock, err := a.State.Lock()
+	unlock, err := a.LockState(ctx)
 	if err != nil {
 		return err
 	}
@@ -158,11 +290,22 @@ func (a *App) Rollback(ctx context.Context, refArg, serviceArg string) error {
 	old := rs.Version
 	rs.Version, rs.PrevVersion = rs.PrevVersion, old
 	rs.PublishedAt, rs.PrevPublishedAt = rs.PrevPublishedAt, rs.PublishedAt
-	rs.InstalledAt = a.Now().UTC()
+	now := a.Now().UTC()
+	rs.InstalledAt = now
+	wasAuto := rs.AutoUpdate
+	if wasAuto {
+		stopAutoUpdate(rs, now)
+	}
 	if err := a.State.Save(s); err != nil {
-		return err
+		if wasAuto {
+			return fmt.Errorf("rollback of %s succeeded but the state could not be saved (auto-update not stopped; run: ship update %s --service %s --auto-update=false): %w", rs.Unit, ref, service, err)
+		}
+		return fmt.Errorf("rollback of %s succeeded but the state could not be saved: %w", rs.Unit, err)
 	}
 	fmt.Fprintf(a.Out, "%s: %s -> %s%s\n", rs.Unit, old, rs.Version, republished(old, rs))
+	if wasAuto {
+		fmt.Fprintf(a.Out, "%s: auto-update stopped; turn it back on with: ship update %s --service %s --auto-update\n", rs.Unit, ref, service)
+	}
 	return nil
 }
 

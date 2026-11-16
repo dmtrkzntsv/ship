@@ -31,13 +31,14 @@ func publish(t *testing.T, st *storetest.Mem, project, version string, channels 
 	publishAt(t, st, fixedNow, project, version, channels, withUnit, assets...)
 }
 
-// publishAt is publish with the given publish time.
+// publishAt is publish with the given publish time. Each binary holds its
+// asset, arch, version and publish time, so builds differ on disk.
 func publishAt(t *testing.T, st *storetest.Mem, at time.Time, project, version string, channels []string, withUnit bool, assets ...string) {
 	t.Helper()
 	dir := t.TempDir()
 	for _, a := range assets {
 		for _, arch := range []string{"amd64", "arm64"} {
-			require.NoError(t, os.WriteFile(filepath.Join(dir, a+"-linux-"+arch), []byte(a+"-"+arch), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, a+"-linux-"+arch), []byte(a+"-"+arch+" "+version+" "+at.Format(time.RFC3339)), 0o755))
 		}
 		if withUnit {
 			require.NoError(t, os.WriteFile(filepath.Join(dir, a+".service"), []byte(unitTmpl), 0o644))
@@ -76,11 +77,13 @@ func newEnv(t *testing.T) *env {
 	out := &bytes.Buffer{}
 	a := &app.App{
 		Out: out, Err: &bytes.Buffer{},
-		NewStore: func() (store.Store, error) { return st, nil },
-		State:    state.File{Path: filepath.Join(t.TempDir(), "state.json")},
-		Host:     &host.Host{Paths: host.Paths{Root: root}, Sys: sys, Out: out},
-		Arch:     "amd64",
-		Now:      func() time.Time { return fixedNow },
+		NewStore:     func() (store.Store, error) { return st, nil },
+		State:        state.File{Path: filepath.Join(t.TempDir(), "state.json")},
+		Host:         &host.Host{Paths: host.Paths{Root: root}, Sys: sys, Out: out},
+		Arch:         "amd64",
+		Now:          func() time.Time { return fixedNow },
+		ShipPath:     func() (string, error) { return "/usr/local/bin/ship", nil },
+		RunClockPath: filepath.Join(t.TempDir(), "auto-update.json"),
 	}
 	return &env{app: a, sys: sys, root: root, out: out, store: st}
 }

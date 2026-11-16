@@ -39,6 +39,11 @@ func (p Paths) UnitPath(unit string) string {
 	return p.join("etc", "systemd", "system", unit+".service")
 }
 
+// TimerPath is /etc/systemd/system/<unit>.timer.
+func (p Paths) TimerPath(unit string) string {
+	return p.join("etc", "systemd", "system", unit+".timer")
+}
+
 // UnitBackup is /opt/S/<unit>.service.prev.
 func (p Paths) UnitBackup(s, unit string) string { return p.join("opt", s, unit+".service.prev") }
 

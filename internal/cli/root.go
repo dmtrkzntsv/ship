@@ -62,6 +62,10 @@ func signalContext() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 }
 
+// hostGuard is requireLinuxRoot; install and update call it through the
+// variable so tests can run them without root.
+var hostGuard = requireLinuxRoot
+
 // requireLinuxRoot guards host-changing commands.
 func requireLinuxRoot(cmdName string) error {
 	if err := requireLinux(cmdName); err != nil {

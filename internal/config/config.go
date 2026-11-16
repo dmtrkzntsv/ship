@@ -20,6 +20,7 @@ const defaultBucket = "ship"
 type Config struct {
 	R2         R2         `toml:"r2"`
 	Cloudflare Cloudflare `toml:"cloudflare"`
+	Notify     Notify     `toml:"notify"`
 }
 
 type R2 struct {
@@ -27,6 +28,10 @@ type R2 struct {
 	AccessKeyID     string `toml:"access_key_id"`
 	SecretAccessKey string `toml:"secret_access_key"`
 	Bucket          string `toml:"bucket"`
+}
+
+type Notify struct {
+	URL string `toml:"url"`
 }
 
 type Cloudflare struct {
@@ -73,6 +78,7 @@ func Load(getenv func(string) string, paths []string) (cfg Config, used string, 
 	override(&cfg.R2.SecretAccessKey, "SHIP_R2_SECRET_ACCESS_KEY")
 	override(&cfg.R2.Bucket, "SHIP_R2_BUCKET")
 	override(&cfg.Cloudflare.APIToken, "SHIP_CF_API_TOKEN")
+	override(&cfg.Notify.URL, "SHIP_NOTIFY_URL")
 	if cfg.R2.Bucket == "" {
 		cfg.R2.Bucket = defaultBucket
 	}

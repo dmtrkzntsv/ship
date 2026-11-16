@@ -3,6 +3,7 @@
 package state
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,7 +41,20 @@ type RefState struct {
 	PublishedAt     time.Time `json:"published_at,omitzero"`
 	PrevPublishedAt time.Time `json:"prev_published_at,omitzero"`
 	InstalledAt     time.Time `json:"installed_at"`
+
+	// AutoUpdate turns on `ship update --auto` for this ref.
+	AutoUpdate bool `json:"auto_update,omitempty"`
+	// AutoUpdateStoppedAt is when a failed automatic update or a manual
+	// rollback stopped auto-update on this ref.
+	AutoUpdateStoppedAt time.Time `json:"auto_update_stopped_at,omitzero"`
+	// CheckFailingSince and CheckNotifiedAt track a ref whose release can't
+	// be checked: since when, and when the last notification was sent.
+	CheckFailingSince time.Time `json:"check_failing_since,omitzero"`
+	CheckNotifiedAt   time.Time `json:"check_notified_at,omitzero"`
 }
+
+// ErrLocked marks a Lock refused because another ship process holds it.
+var ErrLocked = errors.New("another ship run holds")
 
 // File is a state file on disk; its lock file is state.lock in the same dir.
 type File struct{ Path string }
@@ -114,6 +128,17 @@ func (f File) Save(s *State) error {
 
 // Lock takes an exclusive, non-blocking flock on the lock file.
 func (f File) Lock() (unlock func(), err error) {
+	return f.LockWait(context.Background(), 0, nil)
+}
+
+// lockPoll is how often LockWait retries a held lock.
+const lockPoll = 100 * time.Millisecond
+
+// LockWait takes an exclusive flock on the lock file, waiting up to timeout
+// for another ship run to release it; onWait (if set) is called once, when
+// the lock is first found held. A timeout of zero tries once, like Lock. A
+// cancelled ctx ends the wait with ctx's error.
+func (f File) LockWait(ctx context.Context, timeout time.Duration, onWait func()) (unlock func(), err error) {
 	lp := f.lockPath()
 	if err := os.MkdirAll(filepath.Dir(lp), 0o755); err != nil {
 		return nil, fmt.Errorf("create lock dir: %w", err)
@@ -122,12 +147,34 @@ func (f File) Lock() (unlock func(), err error) {
 	if err != nil {
 		return nil, fmt.Errorf("open lock %s: %w", lp, err)
 	}
-	if err := syscall.Flock(int(fd.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		fd.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, fmt.Errorf("another ship run holds %s", lp)
+	deadline := time.Now().Add(timeout)
+	tick := time.NewTicker(lockPoll)
+	defer tick.Stop()
+	expire := time.NewTimer(timeout)
+	defer expire.Stop()
+	for waited := false; ; waited = true {
+		err := syscall.Flock(int(fd.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
 		}
-		return nil, fmt.Errorf("lock %s: %w", lp, err)
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			fd.Close()
+			return nil, fmt.Errorf("lock %s: %w", lp, err)
+		}
+		if !time.Now().Before(deadline) {
+			fd.Close()
+			return nil, fmt.Errorf("%w %s", ErrLocked, lp)
+		}
+		if !waited && onWait != nil {
+			onWait()
+		}
+		select {
+		case <-ctx.Done():
+			fd.Close()
+			return nil, ctx.Err()
+		case <-tick.C:
+		case <-expire.C: // the next try is the last
+		}
 	}
 	return func() {
 		_ = syscall.Flock(int(fd.Fd()), syscall.LOCK_UN)

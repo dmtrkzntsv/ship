@@ -288,8 +288,8 @@ func TestStatus(t *testing.T) {
 	require.NoError(t, err)
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	require.Len(t, lines, 3, out)
-	assert.Equal(t, []string{"econumo", "econumo", "econumo", "latest", "v1", "active"}, strings.Fields(lines[1]))
-	assert.Equal(t, []string{"econumo-beta", "econumo", "econumo-beta", "dev", "v2", "inactive"}, strings.Fields(lines[2]))
+	assert.Equal(t, []string{"econumo", "econumo", "econumo", "latest", "v1", "-", "active"}, strings.Fields(lines[1]))
+	assert.Equal(t, []string{"econumo-beta", "econumo", "econumo-beta", "dev", "v2", "-", "inactive"}, strings.Fields(lines[2]))
 
 	out, _, err = runCLI(t, "status", "--service", "econumo-beta")
 	require.NoError(t, err)

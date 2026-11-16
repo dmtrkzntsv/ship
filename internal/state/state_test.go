@@ -1,8 +1,10 @@
 package state
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -69,6 +71,7 @@ func TestLockExclusive(t *testing.T) {
 
 	_, err = f.Lock()
 	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrLocked)
 	assert.Contains(t, err.Error(), "another ship run holds")
 	assert.Contains(t, err.Error(), filepath.Join(filepath.Dir(f.Path), "state.lock"))
 
@@ -76,6 +79,67 @@ func TestLockExclusive(t *testing.T) {
 	unlock2, err := f.Lock()
 	require.NoError(t, err)
 	unlock2()
+}
+
+func TestLockWaitFree(t *testing.T) {
+	f := File{Path: filepath.Join(t.TempDir(), "state.json")}
+	unlock, err := f.LockWait(context.Background(), time.Minute, func() { t.Fatal("must not wait for a free lock") })
+	require.NoError(t, err)
+	unlock()
+}
+
+func TestLockWaitTimesOut(t *testing.T) {
+	f := File{Path: filepath.Join(t.TempDir(), "state.json")}
+	unlock, err := f.Lock()
+	require.NoError(t, err)
+	defer unlock()
+
+	waits := 0
+	start := time.Now()
+	_, err = f.LockWait(context.Background(), 150*time.Millisecond, func() { waits++ })
+	require.ErrorIs(t, err, ErrLocked)
+	assert.Equal(t, 1, waits)
+	assert.GreaterOrEqual(t, time.Since(start), 150*time.Millisecond)
+
+	// No timeout: one try, no wait.
+	_, err = f.LockWait(context.Background(), 0, func() { t.Fatal("must not wait") })
+	require.ErrorIs(t, err, ErrLocked)
+}
+
+func TestLockWaitGetsReleasedLock(t *testing.T) {
+	f := File{Path: filepath.Join(t.TempDir(), "state.json")}
+	unlock, err := f.Lock()
+	require.NoError(t, err)
+	time.AfterFunc(100*time.Millisecond, unlock)
+
+	waits := 0
+	unlock2, err := f.LockWait(context.Background(), 10*time.Second, func() { waits++ })
+	require.NoError(t, err)
+	assert.Equal(t, 1, waits)
+	_, err = f.Lock()
+	require.ErrorIs(t, err, ErrLocked, "LockWait holds the lock")
+	unlock2()
+}
+
+func TestLockWaitCancelled(t *testing.T) {
+	f := File{Path: filepath.Join(t.TempDir(), "state.json")}
+	unlock, err := f.Lock()
+	require.NoError(t, err)
+	defer unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancel)
+	start := time.Now()
+	_, err = f.LockWait(ctx, time.Minute, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Less(t, time.Since(start), 5*time.Second)
+}
+
+func TestLockWaitOpenError(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "state.lock"), 0o755))
+	_, err := File{Path: filepath.Join(dir, "state.json")}.LockWait(context.Background(), time.Second, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "open lock")
 }
 
 func TestUnits(t *testing.T) {
@@ -203,4 +267,23 @@ func TestLockErrors(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "open lock "+filepath.Join(dir, "state.lock"))
 	})
+}
+
+func TestAutoUpdateFieldsRoundTripAndOmit(t *testing.T) {
+	f := File{Path: filepath.Join(t.TempDir(), "state.json")}
+	at := time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC)
+	s := &State{Services: map[string]*Service{"a": {Refs: map[string]*RefState{
+		"on":    {Unit: "a", AutoUpdate: true, CheckFailingSince: at, CheckNotifiedAt: at},
+		"stop":  {Unit: "b", AutoUpdateStoppedAt: at},
+		"plain": {Unit: "c"},
+	}}}}
+	require.NoError(t, f.Save(s))
+	got, err := f.Load()
+	require.NoError(t, err)
+	assert.Equal(t, s.Services["a"].Refs, got.Services["a"].Refs)
+
+	data, err := os.ReadFile(f.Path)
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(string(data), `"auto_update": true`))
+	assert.Equal(t, 1, strings.Count(string(data), `"auto_update_stopped_at"`))
 }

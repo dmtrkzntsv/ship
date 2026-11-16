@@ -503,3 +503,163 @@ func TestWaitHealthyDefaultTick(t *testing.T) {
 	require.NoError(t, h.WaitHealthy(context.Background(), "u"))
 	assert.Equal(t, []string{"IsActive u"}, fs.Calls)
 }
+
+func TestUpdateBadUnitIsBadBuild(t *testing.T) {
+	t.Run("template", func(t *testing.T) {
+		h, _ := installed(t)
+		f := newRelease(t, "new", "unit-new")
+		require.NoError(t, os.WriteFile(f.Unit, []byte("ExecStart={{NOPE}}\n"), 0o644))
+		err := h.Update(context.Background(), target(f))
+		assert.ErrorIs(t, err, host.ErrBadBuild)
+		assert.NotErrorIs(t, err, host.ErrRolledBack)
+	})
+	t.Run("does not verify", func(t *testing.T) {
+		h, fs := installed(t)
+		fs.VerifyErr = errors.New("bad unit")
+		err := h.Update(context.Background(), target(newRelease(t, "new", "unit-new")))
+		assert.ErrorIs(t, err, host.ErrBadBuild)
+		assert.ErrorContains(t, err, "does not verify")
+	})
+}
+
+func TestUpdateHealthFailIsRolledBack(t *testing.T) {
+	h, fs := installed(t)
+	fs.ActiveAfterRestart = activeUnless(t, h, "new")
+	err := h.Update(context.Background(), target(newRelease(t, "new", "unit-new")))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, host.ErrRolledBack)
+	assert.NotErrorIs(t, err, host.ErrRevertFailed)
+	assert.NotErrorIs(t, err, host.ErrBadBuild)
+	assert.ErrorContains(t, err, "update failed, previous version restored: ")
+}
+
+func TestUpdateRevertFailIsRevertFailed(t *testing.T) {
+	skipIfRoot(t)
+	h, fs := installed(t)
+	binDir := h.Paths.BinDir("tw")
+	fs.ActiveAfterRestart = func(string) bool {
+		require.NoError(t, os.Chmod(binDir, 0o555)) // the old pair can no longer be restored
+		return false
+	}
+	t.Cleanup(func() { _ = os.Chmod(binDir, 0o755) })
+	err := h.Update(context.Background(), target(newRelease(t, "new", "unit-new")))
+	assert.ErrorIs(t, err, host.ErrRevertFailed)
+	assert.NotErrorIs(t, err, host.ErrRolledBack)
+
+	// Rollback's revert failing (restart of the restored pair) is the same.
+	h2, fs2, tg := updated(t)
+	fs2.RestartErr = errors.New("exit status 1")
+	err = h2.Rollback(context.Background(), "tw", tg.Ref, tg.Unit)
+	assert.ErrorIs(t, err, host.ErrRevertFailed)
+}
+
+func TestUpdateRevertReloadFailIsRevertFailed(t *testing.T) {
+	h, fs := installed(t)
+	fs.ReloadErr = errors.New("reload failed") // fails the update and then its revert
+	err := h.Update(context.Background(), target(newRelease(t, "new", "unit-new")))
+	assert.ErrorIs(t, err, host.ErrRevertFailed)
+	assert.NotErrorIs(t, err, host.ErrRolledBack)
+}
+
+func TestUpdateOldPairNotHealthyIsRevertFailed(t *testing.T) {
+	h, fs := installed(t)
+	fs.ActiveAfterRestart = func(string) bool { return false } // nothing ever comes up
+	fs.Journal = "still down"
+	err := h.Update(context.Background(), target(newRelease(t, "new", "unit-new")))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, host.ErrRevertFailed)
+	assert.NotErrorIs(t, err, host.ErrRolledBack)
+	assert.ErrorContains(t, err, "update failed and the previous version did not come back up (twillingate-sql failed to come up")
+	assert.Equal(t, 2, countCalls(fs.Calls, restartCall))
+}
+
+func TestRollbackOutcomesAreTyped(t *testing.T) {
+	h, fs, tg := updated(t)
+	fs.ActiveAfterRestart = activeUnless(t, h, "old") // the rolled-back-to pair is unhealthy
+	err := h.Rollback(context.Background(), "tw", tg.Ref, tg.Unit)
+	assert.ErrorIs(t, err, host.ErrRolledBack)
+}
+
+func TestUpdateInterruptedKeepsCanceled(t *testing.T) {
+	h, fs := installed(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	fs.ActiveAfterRestart = func(unit string) bool {
+		if string(read(t, h.Paths.Bin("tw", "twillingate-sql"))) == "new" {
+			cancel() // ship is interrupted while the new version is being checked
+		}
+		return true
+	}
+	err := h.Update(ctx, target(newRelease(t, "new", "unit-new")))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.ErrorIs(t, err, host.ErrRolledBack, "the old pair was restored despite the interruption")
+	assert.Equal(t, "old", read(t, h.Paths.Bin("tw", "twillingate-sql")))
+}
+
+func TestMatches(t *testing.T) {
+	h, _ := installed(t)
+	same := target(newRelease(t, "old", "unit-old"))
+	ok, err := h.Matches(same)
+	require.NoError(t, err)
+	assert.True(t, ok, "the installed binary and unit")
+
+	ok, err = h.Matches(target(newRelease(t, "new", "unit-old")))
+	require.NoError(t, err)
+	assert.False(t, ok, "another binary")
+
+	ok, err = h.Matches(target(newRelease(t, "old", "unit-new")))
+	require.NoError(t, err)
+	assert.False(t, ok, "another unit")
+
+	bad := newRelease(t, "old", "unit-old")
+	require.NoError(t, os.WriteFile(bad.Unit, []byte("ExecStart={{NOPE}}\n"), 0o644))
+	ok, err = h.Matches(target(bad))
+	require.NoError(t, err)
+	assert.False(t, ok, "a unit that does not render is left to Update")
+
+	require.NoError(t, os.Remove(h.Paths.Bin("tw", "twillingate-sql")))
+	ok, err = h.Matches(same)
+	require.NoError(t, err)
+	assert.False(t, ok, "a missing live binary")
+}
+
+func TestMatchesReadErrors(t *testing.T) {
+	h, _ := installed(t)
+	missing := newRelease(t, "old", "unit-old")
+	missing.Binary = filepath.Join(t.TempDir(), "gone")
+	_, err := h.Matches(target(missing))
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	noUnit := newRelease(t, "old", "unit-old")
+	noUnit.Unit = filepath.Join(t.TempDir(), "gone")
+	_, err = h.Matches(target(noUnit))
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	// The live unit is a directory: it cannot be read.
+	h2, _ := installed(t)
+	unit := h2.Paths.UnitPath("twillingate-sql")
+	require.NoError(t, os.Remove(unit))
+	require.NoError(t, os.Mkdir(unit, 0o755))
+	_, err = h2.Matches(target(newRelease(t, "old", "unit-old")))
+	require.Error(t, err)
+}
+
+func TestUpdateUnitWriteAndBinaryRestoreFailIsRevertFailed(t *testing.T) {
+	skipIfRoot(t)
+	h, fs := installed(t)
+	binDir := h.Paths.BinDir("tw")
+	// The unit cannot be written, and by then /opt/S has turned read-only,
+	// so the old binary cannot be put back: a mixed pair is live.
+	restore := host.SetWriteUnitFile(func(string, []byte, os.FileMode) error {
+		require.NoError(t, os.Chmod(binDir, 0o555))
+		return errors.New("disk full")
+	})
+	defer restore()
+	t.Cleanup(func() { _ = os.Chmod(binDir, 0o755) })
+
+	err := h.Update(context.Background(), target(newRelease(t, "new", "unit-new")))
+	require.ErrorIs(t, err, host.ErrRevertFailed)
+	assert.Contains(t, err.Error(), "disk full")
+	assert.Contains(t, err.Error(), "also failed")
+	assert.False(t, hasCallPrefix(fs.Calls, "systemctl"), "no restart: %v", fs.Calls)
+}

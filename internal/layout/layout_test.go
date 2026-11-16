@@ -28,6 +28,13 @@ func TestParseRef(t *testing.T) {
 	}
 }
 
+func TestUnitNameNeverAutoUpdateUnit(t *testing.T) {
+	_, err := UnitName("ship", "auto-update", []string{"ship"})
+	require.EqualError(t, err, `unit name "ship-auto-update" is reserved for ship's automatic updates; install into another --service`)
+	_, err = UnitName("ship-auto-update", "x", nil)
+	require.Error(t, err)
+}
+
 func TestUnitName(t *testing.T) {
 	cases := []struct {
 		svc, name string
@@ -190,6 +197,7 @@ func TestValidateChannel(t *testing.T) {
 func TestReservedServiceAndRefString(t *testing.T) {
 	assert.True(t, ReservedService("root"))
 	assert.True(t, ReservedService("ship"))
+	assert.True(t, ReservedService("ship-auto-update"))
 	assert.False(t, ReservedService("econumo"))
 	assert.Equal(t, "winterflow/hub", Ref{Project: "winterflow", Component: "hub"}.String())
 	assert.Equal(t, "winterflow", Ref{Project: "winterflow"}.String())

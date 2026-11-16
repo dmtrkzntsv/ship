@@ -29,6 +29,9 @@ func UnitName(service, name string, existingUnits []string) (string, error) {
 	default:
 		unit = service + "-" + name
 	}
+	if unit == AutoUpdateUnit {
+		return "", fmt.Errorf("unit name %q is reserved for ship's automatic updates; install into another --service", unit)
+	}
 	if slices.Contains(existingUnits, unit) {
 		return "", fmt.Errorf("unit name %q already exists in service %q", unit, service)
 	}

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/dmtrkzntsv/ship/internal/host"
 )
@@ -30,4 +31,21 @@ func TestFakeSysFail(t *testing.T) {
 	// Calls not listed behave as before.
 	assert.NoError(t, fs.Systemctl(ctx, "start", "v"))
 	assert.True(t, fs.Active["v"])
+}
+
+func TestFakeSysActiveState(t *testing.T) {
+	f := &host.FakeSys{Active: map[string]bool{"a": true}}
+	st, err := f.ActiveState(context.Background(), "a")
+	require.NoError(t, err)
+	assert.Equal(t, "active", st)
+	st, err = f.ActiveState(context.Background(), "b")
+	require.NoError(t, err)
+	assert.Equal(t, "inactive", st)
+	f.ActiveAfterRestart = func(string) bool { return false }
+	st, _ = f.ActiveState(context.Background(), "a")
+	assert.Equal(t, "inactive", st)
+	f.Fail = map[string]error{"ActiveState a": assert.AnError}
+	_, err = f.ActiveState(context.Background(), "a")
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Equal(t, []string{"ActiveState a", "ActiveState b", "ActiveState a", "ActiveState a"}, f.Calls)
 }

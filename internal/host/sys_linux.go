@@ -4,6 +4,7 @@ package host
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -19,9 +20,14 @@ func NewSys() Sys { return linuxSys{} }
 // linuxSys drives systemd and the user database through the system tools.
 type linuxSys struct{}
 
-// run executes name with args; a failure includes the command's output.
+// run executes name with args; a failure includes the command's output. A
+// command killed because ctx ended carries ctx's error, so an interrupt is
+// told apart from a failed command.
 func run(ctx context.Context, name string, args ...string) error {
 	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	if err != nil && ctx.Err() != nil && !errors.Is(err, ctx.Err()) {
+		err = fmt.Errorf("%w (%w)", err, ctx.Err())
+	}
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		if msg != "" {
@@ -42,6 +48,24 @@ func (linuxSys) Systemctl(ctx context.Context, args ...string) error {
 
 func (linuxSys) IsActive(ctx context.Context, unit string) bool {
 	return exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", unit).Run() == nil
+}
+
+func (linuxSys) ActiveState(ctx context.Context, unit string) (string, error) {
+	args := []string{"show", "-p", "ActiveState", "--value", unit}
+	out, err := exec.CommandContext(ctx, "systemctl", args...).Output()
+	if err != nil {
+		if ctx.Err() != nil && !errors.Is(err, ctx.Err()) {
+			err = fmt.Errorf("%w (%w)", err, ctx.Err())
+		}
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			if msg := strings.TrimSpace(string(ee.Stderr)); msg != "" {
+				return "", fmt.Errorf("systemctl %s: %w: %s", strings.Join(args, " "), err, msg)
+			}
+		}
+		return "", fmt.Errorf("systemctl %s: %w", strings.Join(args, " "), err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func (linuxSys) JournalTail(ctx context.Context, unit string, n int) string {

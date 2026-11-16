@@ -110,6 +110,9 @@ preflight() {
 	for unit in "${UNITS[@]}"; do
 		[ ! -e "/etc/systemd/system/$unit.service" ] || fail "unit $unit.service already exists"
 	done
+	for unit in ship-auto-update.service ship-auto-update.timer; do
+		[ ! -e "/etc/systemd/system/$unit" ] || fail "$unit already exists"
+	done
 	[ -x "$SHIP" ] || fail "$SHIP not built (run: make build)"
 }
 
@@ -133,6 +136,9 @@ cleanup() {
 		systemctl disable "$unit" 2>/dev/null
 		rm -f "/etc/systemd/system/$unit.service"
 	done
+	systemctl disable --now ship-auto-update.timer 2>/dev/null
+	systemctl stop ship-auto-update.service 2>/dev/null
+	rm -f /etc/systemd/system/ship-auto-update.service /etc/systemd/system/ship-auto-update.timer
 	systemctl daemon-reload
 	for unit in "${UNITS[@]}"; do systemctl reset-failed "$unit" 2>/dev/null; done
 	for u in "${USERS[@]}"; do
@@ -279,8 +285,8 @@ echo "$out"
 grep -qx 'hi' <<<"$out" || fail "ship run printed '$out', want 'hi'"
 out=$(ship status)
 echo "$out"
-assert_contains "$out" '^e2e +fixture +e2e +latest +v3 +active$' "status"
-assert_contains "$out" '^e2e +fixture/sidecar +e2e-sidecar +latest +v3 +active$' "status"
+assert_contains "$out" '^e2e +fixture +e2e +latest +v3 +- +active$' "status"
+assert_contains "$out" '^e2e +fixture/sidecar +e2e-sidecar +latest +v3 +- +active$' "status"
 
 log "7. publishing 12 more versions with --keep 10 prunes the oldest"
 for i in $(seq 4 15); do
@@ -390,6 +396,25 @@ assert_eq "$(st '.services.old')" null "state of old"
 if [ "$MADE_STATE_DIR" = true ]; then
 	assert_contains "$(ship status)" '^no services installed$' "status after uninstall"
 fi
+
+log "10. auto-update: a timer installed with --auto-update, ship update --auto picks up a new dev build"
+ship publish fixture --path "$WORK/v1" --version v1 --channels dev
+ship install fixture --service e2e --version dev --auto-update
+printf 'PORT=18080\n' >/etc/e2e/fixture.env
+assert_file /etc/systemd/system/ship-auto-update.service
+assert_file /etc/systemd/system/ship-auto-update.timer
+assert_eq "$(systemctl is-enabled ship-auto-update.timer)" enabled "is-enabled ship-auto-update.timer"
+# the real timer must not race the test's own runs; a manual run still works
+systemctl stop ship-auto-update.timer
+assert_eq "$(st '.services.e2e.refs.fixture.auto_update')" true "auto_update after install"
+ship start fixture --service e2e
+assert_running e2e 18080 v1
+ship publish fixture --path "$WORK/v3" --version v3 --channels dev
+ship update --auto
+assert_running e2e 18080 v3
+assert_eq "$(st '.services.e2e.refs.fixture.auto_update')" true "auto_update after the automatic update"
+assert_contains "$(ship status)" '^e2e +fixture +e2e +dev +v3 +on +active$' "status"
+ship uninstall fixture --service e2e --purge
 
 log "cleanup"
 trap - EXIT

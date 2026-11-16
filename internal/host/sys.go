@@ -8,6 +8,9 @@ type Sys interface {
 	DaemonReload(ctx context.Context) error
 	Systemctl(ctx context.Context, args ...string) error
 	IsActive(ctx context.Context, unit string) bool
+	// ActiveState is the unit's systemd ActiveState ("active", "inactive",
+	// "failed", ...); an error means it could not be asked.
+	ActiveState(ctx context.Context, unit string) (string, error)
 	JournalTail(ctx context.Context, unit string, n int) string
 	VerifyUnit(ctx context.Context, path string) error
 	UserExists(name string) bool

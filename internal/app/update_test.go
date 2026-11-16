@@ -3,6 +3,7 @@ package app_test
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -39,7 +40,7 @@ func TestAppUpdateUsesRememberedChannel(t *testing.T) {
 	}, rs)
 	assert.Equal(t, "econumo-beta: 1.4.0 -> 1.5.0\n", e.out.String())
 	assert.Contains(t, e.sys.Calls, "systemctl restart econumo-beta")
-	assert.Equal(t, "econumo-amd64", readFile(t, e.app.Host.Paths.Bin("econumo-beta", "econumo")))
+	assert.Equal(t, "econumo-amd64 1.5.0 "+fixedNow.Format(time.RFC3339), readFile(t, e.app.Host.Paths.Bin("econumo-beta", "econumo")))
 }
 
 func TestAppUpdateVersionIsRemembered(t *testing.T) {
@@ -110,7 +111,7 @@ func TestAppUpdateInterruptedDuringHealthCheck(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled)
 	assert.Contains(t, err.Error(), "previous version restored")
 	assert.Equal(t, before, e.state(t))
-	assert.Equal(t, "econumo-amd64", readFile(t, p.Bin("econumo-beta", "econumo")))
+	assert.Equal(t, "econumo-amd64 1.4.0 "+fixedNow.Format(time.RFC3339), readFile(t, p.Bin("econumo-beta", "econumo")))
 	assert.Equal(t, unitBefore, readFile(t, p.UnitPath("econumo-beta")))
 	var restarts int
 	for _, c := range e.sys.Calls {
@@ -258,4 +259,70 @@ func readFile(t *testing.T, path string) string {
 	b, err := os.ReadFile(path)
 	require.NoError(t, err)
 	return string(b)
+}
+
+func TestAppUpdateRecordsBuildAlreadyLive(t *testing.T) {
+	e := installedEnv(t)
+	ctx := context.Background()
+	readOnlyStateDir(t, e)
+	require.Error(t, e.app.Update(ctx, app.UpdateArgs{Ref: "econumo", Service: "econumo-beta"}))
+	assert.Contains(t, readFile(t, e.app.RunClockPath), `"pending"`)
+	bin := e.app.Host.Paths.Bin("econumo-beta", "econumo")
+	prev := readFile(t, bin+".prev")
+
+	// Still unsaveable: recorded in memory only, so nothing is claimed.
+	e.out.Reset()
+	e.sys.Calls = nil
+	require.Error(t, e.app.Update(ctx, app.UpdateArgs{Ref: "econumo", Service: "econumo-beta"}))
+	assert.NotContains(t, e.out.String(), "already installed")
+	assert.NotContains(t, e.sys.Calls, "systemctl restart econumo-beta")
+
+	require.NoError(t, os.Chmod(filepath.Dir(e.app.State.Path), 0o755))
+	e.out.Reset()
+	e.sys.Calls = nil
+	require.NoError(t, e.app.Update(ctx, app.UpdateArgs{Ref: "econumo", Service: "econumo-beta"}))
+	assert.Equal(t, "econumo-beta: already installed 1.5.0, state recorded\n", e.out.String())
+	assert.NotContains(t, e.sys.Calls, "systemctl restart econumo-beta")
+	assert.Equal(t, prev, readFile(t, bin+".prev"))
+	rs := e.state(t).Services["econumo-beta"].Refs["econumo"]
+	assert.Equal(t, "1.5.0", rs.Version)
+	assert.Equal(t, "1.4.0", rs.PrevVersion)
+	assert.NotContains(t, readFile(t, e.app.RunClockPath), `"pending"`)
+}
+
+func TestAppUpdateLiveFilesUnreadable(t *testing.T) {
+	e := installedEnv(t)
+	// A pending record for 1.5.0 makes the update compare the live files.
+	pending := `{"pending":{"service":"econumo-beta","ref":"econumo","version":"1.5.0","published_at":"` + fixedNow.Format(time.RFC3339) + `"}}`
+	require.NoError(t, os.WriteFile(e.app.RunClockPath, []byte(pending), 0o600))
+	bin := e.app.Host.Paths.Bin("econumo-beta", "econumo")
+	require.NoError(t, os.Remove(bin))
+	require.NoError(t, os.Mkdir(bin, 0o755)) // a directory cannot be hashed
+	err := e.app.Update(context.Background(), app.UpdateArgs{Ref: "econumo", Service: "econumo-beta"})
+	require.Error(t, err)
+	assert.Empty(t, e.sys.Calls)
+	assert.Equal(t, "1.4.0", e.state(t).Services["econumo-beta"].Refs["econumo"].Version)
+}
+
+func TestAppUpdatePendingRecordForOtherFilesInstalls(t *testing.T) {
+	e := installedEnv(t)
+	// A pending record for 1.5.0, but the host still runs 1.4.0 (a revert
+	// put it back): the record does not count, the update installs.
+	pending := `{"pending":{"service":"econumo-beta","ref":"econumo","version":"1.5.0","published_at":"` + fixedNow.Format(time.RFC3339) + `"}}`
+	require.NoError(t, os.WriteFile(e.app.RunClockPath, []byte(pending), 0o600))
+	require.NoError(t, e.app.Update(context.Background(), app.UpdateArgs{Ref: "econumo", Service: "econumo-beta"}))
+	assert.Contains(t, e.sys.Calls, "systemctl restart econumo-beta")
+	assert.Equal(t, "econumo-beta: 1.4.0 -> 1.5.0\n", e.out.String())
+	assert.NotContains(t, readFile(t, e.app.RunClockPath), `"pending"`)
+}
+
+func TestAppRollbackStateNotSavedSaysSo(t *testing.T) {
+	e := installedEnv(t)
+	ctx := context.Background()
+	require.NoError(t, e.app.Update(ctx, app.UpdateArgs{Ref: "econumo", Service: "econumo-beta", AutoUpdate: ptr(true)}))
+	readOnlyStateDir(t, e)
+	err := e.app.Rollback(ctx, "econumo", "econumo-beta")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rollback of econumo-beta succeeded but the state could not be saved (auto-update not stopped; run: ship update econumo --service econumo-beta --auto-update=false): ")
+	assert.Contains(t, err.Error(), "create temp state file")
 }

@@ -156,8 +156,9 @@ file exists yet, and that file is then the live configuration. So:
 ## Commands
 
 ```
-ship install   <ref> [--service S] --version V [--cf-zone Z]
-ship update    <ref> [--service S] [--version V] [--purge-cache]
+ship install   <ref> [--service S] --version V [--cf-zone Z] [--auto-update]
+ship update    <ref> [--service S] [--version V] [--purge-cache] [--auto-update[=false]]
+ship update    --auto
 ship rollback  <ref> [--service S]
 ship uninstall <ref> [--service S] [--purge] [--purge-cache]
 ship start|stop|restart <ref> [--service S]
@@ -187,6 +188,106 @@ manage yet it refuses if `/opt/S` exists, `/etc/S` exists and its group is not
 names such as `root`, `ssh` or `etc` cannot be services. `uninstall --purge`
 deletes the service user only if ship created it. An interrupted `update` or
 `rollback` (Ctrl-C, SIGTERM, SIGHUP) restores the previous version before exiting.
+
+## Automatic updates
+
+Off by default. A host can follow a moving channel (`latest`, `dev`, `edge`, ...)
+on its own: a ref installed with auto-update on is updated within minutes of
+each publish, through the same path as `ship update` (checksum verification,
+health check, rollback of a failed update).
+
+```sh
+sudo ship install econumo --version dev --auto-update
+sudo ship update econumo --auto-update          # turn it on for an installed ref
+sudo ship update econumo --auto-update=false    # turn it off
+```
+
+It is refused on a ref pinned to a version, which never changes. `ship status`
+shows the setting in the `AUTO` column: `on`, `-` (off) or `stopped`.
+
+Turning it on writes and enables `ship-auto-update.timer`, which runs
+`ship-auto-update.service` (`ship update --auto`) 2 minutes after boot and then
+every 5 minutes, with up to a minute of random delay; a run may take up to 30
+minutes. A run walks every ref that has auto-update on, and prints nothing for
+refs that are up to date. A ref whose unit is not running (installed and not
+started yet, or stopped with `ship stop`) is skipped, so an update never starts
+a service; it is picked up again once it runs. If systemd cannot be asked
+whether the unit runs, the ref counts as "can't check" (see below). The units
+stay when the last ref turns auto-update off. They are named
+`ship-auto-update.service` and `.timer`; ship refuses to overwrite files of
+those names that are not its own, and never gives a service that name. To change the interval:
+
+```sh
+sudo systemctl edit ship-auto-update.timer
+# [Timer]
+# OnUnitActiveSec=
+# OnUnitActiveSec=30min
+```
+
+Run output is in the journal: `journalctl -u ship-auto-update`. The run exits
+non-zero when a ref failed, so `systemctl status ship-auto-update` shows it.
+
+The timer's runs read their settings only from `/etc/ship/config.toml`: R2
+credentials or a notification URL exported in your shell (`SHIP_R2_*`,
+`SHIP_NOTIFY_URL`, ...) do not reach them. Turning auto-update on warns about
+each `SHIP_*` variable set in the shell; put those settings in the file.
+
+While a run holds the state lock, `ship install`, `update`, `rollback`,
+`uninstall`, `start`, `stop`, `restart` and `self-update` wait for it to finish
+(up to 2 minutes, printing `waiting for another ship run to finish…`; Ctrl-C
+stops the wait) instead of failing. They hold the lock while they work, so a run
+never restarts a unit you are stopping.
+
+A failed automatic update (the health check fails, or the build is broken) stops
+auto-update on that ref, after the previous version is restored: `AUTO` shows
+`stopped` and nothing is updated on that ref until you look and run
+`ship update <ref> --auto-update` again. A manual `ship rollback` of a ref with
+auto-update on stops it the same way, so the next run does not undo it. A manual
+`ship update` without the flag updates once and leaves the setting as it is.
+
+### Notifications
+
+Only automatic updates notify; manual commands never do. Set one URL in
+`/etc/ship/config.toml` or in `SHIP_NOTIFY_URL`, in
+[shoutrrr](https://containrrr.dev/shoutrrr/) format (`telegram://`, `ntfy://`,
+`slack://`, `discord://`, `generic://`, `smtp://`); unset means no notifications:
+
+```toml
+[notify]
+url = "telegram://<bot_token>@telegram?chats=<chat_id>"
+```
+
+Every message starts with the host name. There are six kinds:
+
+- updated: `homelab: econumo (dev) 2026-11-15T10:02 → 2026-11-16T09:40`;
+- failed: `homelab: econumo (dev) build X failed, still on Y; auto-update stopped`,
+  with the error and the journal lines the health check collected. A checksum
+  mismatch is only treated as a failed build when it repeats on the next run
+  against the same `SHA256SUMS`; until then it counts as "can't check", since
+  a run can overlap a publish;
+- down: `homelab: econumo is DOWN — update to X failed and rollback to Y failed;
+  auto-update stopped`, with the journal lines;
+- not saved: `homelab: econumo (dev) updated to X but the state could not be
+  saved; automatic updates halted`, when the update worked but `state.json`
+  could not be written. The run stops there and remembers the update as
+  pending in `/var/lib/ship/auto-update.json`. The next run, or a manual
+  `ship update` of that ref, finds X installed as remembered and only records
+  it (no restart, rollback target kept). While the state still cannot be
+  saved, later runs update nothing: every run first checks that `state.json`
+  can be written, and otherwise counts as "can't run" (below). Without such a
+  record, an update always installs, restarts and health-checks;
+- can't check: `homelab: can't check econumo (dev) for updates since 14:02: <error>`,
+  sent when R2 or the network has been failing for an hour, repeated every 24
+  hours (`still can't check ...`), and followed by `... reachable again, was
+  failing since 14:02 (3h)` when it recovers. Auto-update stays on;
+- can't run: `homelab: automatic updates can't run since 14:02: <error>`, when the
+  state file, the R2 settings or the state lock stop a whole run, with the same
+  one-hour, 24-hour and recovery rules.
+
+A send is tried up to 3 times within about 30 seconds; if it still fails, the
+failure goes to the journal and the run exits non-zero, and the update stays.
+An invalid URL makes `ship update --auto` fail at start, and turning auto-update
+on is refused while it is invalid.
 
 ## Moving a hand-installed service to ship
 

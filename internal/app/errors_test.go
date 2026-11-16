@@ -1,17 +1,21 @@
 package app_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/dmtrkzntsv/ship/internal/app"
 	"github.com/dmtrkzntsv/ship/internal/release"
+	"github.com/dmtrkzntsv/ship/internal/state"
 	"github.com/dmtrkzntsv/ship/internal/store"
 )
 
@@ -43,6 +47,27 @@ func readOnlyStateDir(t *testing.T, e *env) {
 	unlock()
 	require.NoError(t, os.Chmod(dir, 0o555))
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+}
+
+// readOnlyStateOnRestart makes saving the state fail from the first restart
+// on: the run got past its start-of-run save, then the disk turned read-only.
+// It wraps active, the unit's health as ActiveAfterRestart would report it.
+func readOnlyStateOnRestart(t *testing.T, e *env, active func(string) bool) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root can write anywhere")
+	}
+	dir := filepath.Dir(e.app.State.Path)
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	e.sys.ActiveAfterRestart = func(u string) bool {
+		for _, c := range e.sys.Calls {
+			if strings.HasPrefix(c, "systemctl restart ") {
+				require.NoError(t, os.Chmod(dir, 0o555))
+				break
+			}
+		}
+		return active(u)
+	}
 }
 
 func TestCommandsReportLockAndStateErrors(t *testing.T) {
@@ -97,6 +122,63 @@ func TestCommandsReportLockAndStateErrors(t *testing.T) {
 			assert.Empty(t, e.sys.Calls)
 		})
 	}
+}
+
+func TestInteractiveCommandsWaitForLock(t *testing.T) {
+	ctx := context.Background()
+	cmds := map[string]func(a *app.App) error{
+		"install": func(a *app.App) error {
+			return a.Install(ctx, app.InstallArgs{Ref: "twillingate", Version: "v2"})
+		},
+		"uninstall": func(a *app.App) error {
+			return a.Uninstall(ctx, app.UninstallArgs{Ref: "econumo", Service: "econumo-beta"})
+		},
+		"update":   func(a *app.App) error { return a.Update(ctx, app.UpdateArgs{Ref: "econumo", Service: "econumo-beta"}) },
+		"rollback": func(a *app.App) error { return a.Rollback(ctx, "econumo", "econumo-beta") },
+		"stop":     func(a *app.App) error { return a.Lifecycle(ctx, "stop", "econumo", "econumo-beta") },
+		"start":    func(a *app.App) error { return a.Lifecycle(ctx, "start", "econumo", "econumo-beta") },
+	}
+	for name, run := range cmds {
+		t.Run(name, func(t *testing.T) {
+			e := installedEnv(t)
+			if name == "rollback" {
+				require.NoError(t, e.app.Update(ctx, app.UpdateArgs{Ref: "econumo", Service: "econumo-beta"}))
+			}
+			errOut := &bytes.Buffer{}
+			e.app.Err = errOut
+			e.app.LockWait = 10 * time.Second
+			unlock, err := e.app.State.Lock()
+			require.NoError(t, err)
+			time.AfterFunc(100*time.Millisecond, unlock)
+
+			require.NoError(t, run(e.app))
+			assert.Equal(t, "waiting for another ship run to finish\u2026\n", errOut.String())
+		})
+	}
+}
+
+func TestInteractiveLockWaitTimesOut(t *testing.T) {
+	e := installedEnv(t)
+	e.app.LockWait = 50 * time.Millisecond
+	unlock, err := e.app.State.Lock()
+	require.NoError(t, err)
+	defer unlock()
+	err = e.app.Update(context.Background(), app.UpdateArgs{Ref: "econumo", Service: "econumo-beta"})
+	require.ErrorIs(t, err, state.ErrLocked)
+	assert.Empty(t, e.sys.Calls)
+}
+
+func TestInteractiveLockWaitCancelled(t *testing.T) {
+	e := installedEnv(t)
+	e.app.LockWait = time.Minute
+	unlock, err := e.app.State.Lock()
+	require.NoError(t, err)
+	defer unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancel)
+	err = e.app.Lifecycle(ctx, "stop", "econumo", "econumo-beta")
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Empty(t, e.sys.Calls)
 }
 
 func TestCommandsRejectBadRefs(t *testing.T) {

@@ -146,11 +146,29 @@ func TestSelfUpdateErrors(t *testing.T) {
 		require.NoError(t, lerr)
 		assert.Empty(t, s.SelfChannel, "a failed update remembers nothing")
 	})
-	t.Run("state locked", func(t *testing.T) {
+	t.Run("state locked as root", func(t *testing.T) {
 		env, exe := selfUpdateEnv(t)
+		asRoot(t, true)
 		unlock, err := env.state.Lock()
 		require.NoError(t, err)
 		defer unlock()
+		for _, args := range [][]string{{"self-update", "--version", "dev"}, {"self-update"}} {
+			_, _, err = runCLI(t, args...)
+			require.ErrorIs(t, err, state.ErrLocked, "%v", args)
+			assert.Equal(t, "old-binary", readFile(t, exe), "nothing is replaced without the lock")
+		}
+	})
+	t.Run("state locked, not root", func(t *testing.T) {
+		env, exe := selfUpdateEnv(t)
+		asRoot(t, false)
+		unlock, err := env.state.Lock()
+		require.NoError(t, err)
+		defer unlock()
+		// Without root there is no host to guard: the binary is replaced as
+		// before, and only remembering the channel needs the lock.
+		_, _, err = runCLI(t, "self-update")
+		require.NoError(t, err)
+		assert.Equal(t, "latest-binary", readFile(t, exe))
 		_, _, err = runCLI(t, "self-update", "--version", "dev")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), `updated, but could not remember channel "dev"`)
@@ -177,4 +195,12 @@ func TestSelfUpdateErrors(t *testing.T) {
 		assert.Contains(t, err.Error(), `updated, but could not remember channel "dev"`)
 		assert.Equal(t, "dev-binary", readFile(t, exe))
 	})
+}
+
+// asRoot makes self-update see the process as root (or not).
+func asRoot(t *testing.T, root bool) {
+	t.Helper()
+	old := runningAsRoot
+	runningAsRoot = func() bool { return root }
+	t.Cleanup(func() { runningAsRoot = old })
 }

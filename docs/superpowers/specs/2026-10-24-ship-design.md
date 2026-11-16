@@ -500,6 +500,13 @@ Services installed by `econumo-deploy.sh` (unit at
 - Tool projects (binary, no unit) are publishable but not installable;
   `self-update` defaults to `latest`.
 
+## Automatic updates
+
+Opt-in per ref (`install --auto-update`, `update --auto-update`): a systemd
+timer runs `ship update --auto` and updates the opted-in refs that follow a
+moving channel, with notifications through one configured URL. Design:
+[2026-11-15-auto-update-design.md](2026-11-15-auto-update-design.md).
+
 ## Left to the builder
 
 - Go package layout, S3 client library, TOML library, test approach (an
