@@ -266,6 +266,7 @@ func TestAppUpdateRecordsBuildAlreadyLive(t *testing.T) {
 	ctx := context.Background()
 	readOnlyStateDir(t, e)
 	require.Error(t, e.app.Update(ctx, app.UpdateArgs{Ref: "econumo", Service: "econumo-beta"}))
+	assert.Contains(t, readFile(t, e.app.RunClockPath), `"pending"`)
 	bin := e.app.Host.Paths.Bin("econumo-beta", "econumo")
 	prev := readFile(t, bin+".prev")
 
@@ -279,10 +280,14 @@ func TestAppUpdateRecordsBuildAlreadyLive(t *testing.T) {
 	rs := e.state(t).Services["econumo-beta"].Refs["econumo"]
 	assert.Equal(t, "1.5.0", rs.Version)
 	assert.Equal(t, "1.4.0", rs.PrevVersion)
+	assert.NotContains(t, readFile(t, e.app.RunClockPath), `"pending"`)
 }
 
 func TestAppUpdateLiveFilesUnreadable(t *testing.T) {
 	e := installedEnv(t)
+	// A pending record for 1.5.0 makes the update compare the live files.
+	pending := `{"pending":{"service":"econumo-beta","ref":"econumo","version":"1.5.0","published_at":"` + fixedNow.Format(time.RFC3339) + `"}}`
+	require.NoError(t, os.WriteFile(e.app.RunClockPath, []byte(pending), 0o600))
 	bin := e.app.Host.Paths.Bin("econumo-beta", "econumo")
 	require.NoError(t, os.Remove(bin))
 	require.NoError(t, os.Mkdir(bin, 0o755)) // a directory cannot be hashed
@@ -290,4 +295,16 @@ func TestAppUpdateLiveFilesUnreadable(t *testing.T) {
 	require.Error(t, err)
 	assert.Empty(t, e.sys.Calls)
 	assert.Equal(t, "1.4.0", e.state(t).Services["econumo-beta"].Refs["econumo"].Version)
+}
+
+func TestAppUpdatePendingRecordForOtherFilesInstalls(t *testing.T) {
+	e := installedEnv(t)
+	// A pending record for 1.5.0, but the host still runs 1.4.0 (a revert
+	// put it back): the record does not count, the update installs.
+	pending := `{"pending":{"service":"econumo-beta","ref":"econumo","version":"1.5.0","published_at":"` + fixedNow.Format(time.RFC3339) + `"}}`
+	require.NoError(t, os.WriteFile(e.app.RunClockPath, []byte(pending), 0o600))
+	require.NoError(t, e.app.Update(context.Background(), app.UpdateArgs{Ref: "econumo", Service: "econumo-beta"}))
+	assert.Contains(t, e.sys.Calls, "systemctl restart econumo-beta")
+	assert.Equal(t, "econumo-beta: 1.4.0 -> 1.5.0\n", e.out.String())
+	assert.NotContains(t, readFile(t, e.app.RunClockPath), `"pending"`)
 }

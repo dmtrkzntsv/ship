@@ -799,14 +799,25 @@ func TestAutoUpdateStateNotSavedAfterUpdateHalts(t *testing.T) {
 	assert.Equal(t, "1.4.0", f.ref(t, "econumo-beta").Version)
 	prev := readFile(t, bin+".prev")
 	assert.Contains(t, prev, "1.4.0")
+	clock := readFile(t, f.app.RunClockPath)
+	assert.Contains(t, clock, `"pending"`, "the swap is remembered for the next run")
+	assert.Contains(t, clock, `"prev_version": "1.4.0"`)
 
-	// The next run finds 1.6.0 already live: it records it, without a
-	// restart, a notification or touching the rollback target.
-	require.NoError(t, os.Chmod(filepath.Dir(f.app.State.Path), 0o755))
+	// The state still cannot be saved: the pending build is recorded again,
+	// without a restart and without another halt message.
 	f.n.got = nil
 	f.sys.Calls = nil
-	f.out.Reset()
 	f.at(5 * time.Minute)
+	require.Error(t, f.app.AutoUpdate(ctx))
+	assert.Empty(t, f.n.got)
+	assert.Equal(t, 0, restarts(f.sys.Calls, "econumo-beta"))
+	assert.Contains(t, f.errOut.String(), "create temp state file")
+
+	// Once the state saves, the next run records it and goes on.
+	require.NoError(t, os.Chmod(filepath.Dir(f.app.State.Path), 0o755))
+	f.sys.Calls = nil
+	f.out.Reset()
+	f.at(10 * time.Minute)
 	require.NoError(t, f.app.AutoUpdate(ctx))
 	assert.Equal(t, 0, restarts(f.sys.Calls, "econumo-beta"))
 	assert.Equal(t, prev, readFile(t, bin+".prev"))
@@ -816,6 +827,26 @@ func TestAutoUpdateStateNotSavedAfterUpdateHalts(t *testing.T) {
 	assert.Equal(t, "1.6.0", rs.Version)
 	assert.Equal(t, "1.4.0", rs.PrevVersion)
 	assert.True(t, rs.AutoUpdate)
+	assert.NotContains(t, readFile(t, f.app.RunClockPath), `"pending"`, "the marker is cleared")
+}
+
+func TestAutoUpdateLiveBuildWithoutMarkerIsUpdated(t *testing.T) {
+	f := autoEnv(t)
+	ctx := context.Background()
+	require.NoError(t, f.app.AutoUpdate(ctx))
+	// The state says 1.4.0 while 1.5.0 is live, with no pending marker (it
+	// was not ship that left it so): go through the full update.
+	s := f.state(t)
+	rs := s.Services["econumo-beta"].Refs["econumo"]
+	rs.Version, rs.PrevVersion = "1.4.0", ""
+	require.NoError(t, f.app.State.Save(s))
+	f.sys.Calls = nil
+	f.out.Reset()
+
+	require.NoError(t, f.app.AutoUpdate(ctx))
+	assert.Equal(t, 1, restarts(f.sys.Calls, "econumo-beta"), "restarted and health-checked")
+	assert.NotContains(t, f.out.String(), "already installed")
+	assert.Equal(t, "1.5.0", f.ref(t, "econumo-beta").Version)
 }
 
 func TestAutoUpdateSkipsRefThatIsNotRunning(t *testing.T) {
@@ -826,8 +857,6 @@ func TestAutoUpdateSkipsRefThatIsNotRunning(t *testing.T) {
 	s := f.state(t)
 	s.Services["econumo-beta"].Refs["econumo"].CheckFailingSince = fixedNow
 	require.NoError(t, f.app.State.Save(s))
-	before, err := os.ReadFile(f.app.State.Path)
-	require.NoError(t, err)
 
 	f.at(2 * time.Hour)
 	require.NoError(t, f.app.AutoUpdate(ctx))
@@ -835,9 +864,55 @@ func TestAutoUpdateSkipsRefThatIsNotRunning(t *testing.T) {
 	assert.Empty(t, f.n.got)
 	assert.Equal(t, 0, restarts(f.sys.Calls, "econumo-beta"))
 	assert.NotContains(t, f.sys.Calls, "systemctl start econumo-beta")
-	after, err := os.ReadFile(f.app.State.Path)
-	require.NoError(t, err)
-	assert.Equal(t, string(before), string(after), "state and its check clock untouched")
+	rs := f.ref(t, "econumo-beta")
+	assert.True(t, rs.CheckFailingSince.IsZero(), "a skipped ref's check clock starts over")
+	assert.Equal(t, "1.4.0", rs.Version)
+	assert.True(t, rs.AutoUpdate)
+
+	// Started again, a single failed check does not alert with an old "since".
+	f.sys.Active["econumo-beta"] = true
+	require.Error(t, f.app.AutoUpdate(ctx))
+	assert.Empty(t, f.n.got)
+}
+
+func TestAutoUpdateRechecksRunningBeforeSwap(t *testing.T) {
+	f := autoEnv(t)
+	// ship stop lands while the release is fetched: running at the first
+	// check, stopped at the second.
+	f.sys.ActiveAfterRestart = func(u string) bool {
+		n := 0
+		for _, c := range f.sys.Calls {
+			if c == "ActiveState "+u {
+				n++
+			}
+		}
+		return n < 2
+	}
+	require.NoError(t, f.app.AutoUpdate(context.Background()))
+	assert.Equal(t, "econumo-beta: not running, skipped\n", f.out.String())
+	assert.Equal(t, 0, restarts(f.sys.Calls, "econumo-beta"))
+	assert.Empty(t, f.n.got)
+	assert.Equal(t, "1.4.0", f.ref(t, "econumo-beta").Version)
+}
+
+func TestAutoUpdateActiveStateErrorIsCantCheck(t *testing.T) {
+	f := autoEnv(t)
+	ctx := context.Background()
+	f.sys.Fail = map[string]error{"ActiveState econumo-beta": errors.New("Failed to connect to bus")}
+
+	err := f.app.AutoUpdate(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "1 of 1 refs failed")
+	assert.NotContains(t, f.out.String(), "skipped")
+	assert.Contains(t, f.errOut.String(), "econumo-beta: Failed to connect to bus")
+	rs := f.ref(t, "econumo-beta")
+	assert.True(t, rs.CheckFailingSince.Equal(later))
+	assert.True(t, rs.AutoUpdate)
+	assert.Empty(t, f.n.got)
+
+	f.at(time.Hour)
+	require.Error(t, f.app.AutoUpdate(ctx))
+	assert.Equal(t, []string{"can't check econumo-beta (dev) for updates since " + hm(later)}, f.n.titles())
 }
 
 func TestAutoUpdateInterruptedCommandKeepsAutoUpdate(t *testing.T) {
@@ -872,11 +947,16 @@ func TestAutoUpdateNothingOptedInTouchesNothing(t *testing.T) {
 	assert.Empty(t, f.n.got)
 	assert.NoFileExists(t, f.app.RunClockPath)
 
-	// A failing clock from earlier runs is left as it is.
-	clock := `{"failing_since":"2026-10-29T12:00:00Z","reason":"R2 endpoint is not set"}`
+	// A failing clock from earlier runs starts over, silently (no recovery
+	// message); a pending marker is kept.
+	clock := `{"failing_since":"2026-10-29T12:00:00Z","notified_at":"2026-10-29T13:00:00Z","reason":"R2 endpoint is not set",` +
+		`"pending":{"service":"econumo-beta","ref":"econumo","version":"1.5.0"}}`
 	require.NoError(t, os.WriteFile(f.app.RunClockPath, []byte(clock), 0o600))
 	require.NoError(t, f.app.AutoUpdate(ctx))
-	assert.Equal(t, clock, readFile(t, f.app.RunClockPath))
+	got := readFile(t, f.app.RunClockPath)
+	assert.NotContains(t, got, "failing_since")
+	assert.NotContains(t, got, "R2 endpoint")
+	assert.Contains(t, got, `"version": "1.5.0"`)
 	assert.Empty(t, f.n.got)
 }
 

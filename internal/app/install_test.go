@@ -77,12 +77,13 @@ func newEnv(t *testing.T) *env {
 	out := &bytes.Buffer{}
 	a := &app.App{
 		Out: out, Err: &bytes.Buffer{},
-		NewStore: func() (store.Store, error) { return st, nil },
-		State:    state.File{Path: filepath.Join(t.TempDir(), "state.json")},
-		Host:     &host.Host{Paths: host.Paths{Root: root}, Sys: sys, Out: out},
-		Arch:     "amd64",
-		Now:      func() time.Time { return fixedNow },
-		ShipPath: func() (string, error) { return "/usr/local/bin/ship", nil },
+		NewStore:     func() (store.Store, error) { return st, nil },
+		State:        state.File{Path: filepath.Join(t.TempDir(), "state.json")},
+		Host:         &host.Host{Paths: host.Paths{Root: root}, Sys: sys, Out: out},
+		Arch:         "amd64",
+		Now:          func() time.Time { return fixedNow },
+		ShipPath:     func() (string, error) { return "/usr/local/bin/ship", nil },
+		RunClockPath: filepath.Join(t.TempDir(), "auto-update.json"),
 	}
 	return &env{app: a, sys: sys, root: root, out: out, store: st}
 }

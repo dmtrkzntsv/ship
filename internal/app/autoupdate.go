@@ -143,6 +143,7 @@ func (a *App) AutoUpdate(ctx context.Context) error {
 	}
 	targets := autoTargets(s)
 	if len(targets) == 0 {
+		r.resetRunClock()
 		return nil
 	}
 	st, err := a.NewStore()
@@ -153,15 +154,6 @@ func (a *App) AutoUpdate(ctx context.Context) error {
 	r.observeRun("")
 
 	for _, t := range targets {
-		// A stopped unit (never started after install, or ship stop) is left
-		// alone: updating would start it.
-		if !a.Host.Sys.IsActive(ctx, t.rs.Unit) {
-			if err := ctx.Err(); err != nil {
-				return errors.Join(err, r.err())
-			}
-			fmt.Fprintf(a.Out, "%s: not running, skipped\n", t.rs.Unit)
-			continue
-		}
 		if err := r.update(s, st, t); err != nil {
 			return errors.Join(err, r.err())
 		}
@@ -205,21 +197,70 @@ type autoRun struct {
 	clockUnsaved         bool
 }
 
+// errNotRunning stops an automatic update whose unit is not running.
+var errNotRunning = errors.New("not running")
+
+// running asks systemd whether unit is active. An error (systemctl cannot
+// be asked) is not "inactive": the caller treats it as a failed check.
+func (r *autoRun) running(unit string) error {
+	st, err := r.a.Host.Sys.ActiveState(r.ctx, unit)
+	if err != nil {
+		return err
+	}
+	if st == "active" {
+		return nil
+	}
+	if err := r.ctx.Err(); err != nil {
+		return err // systemctl may have been cut short
+	}
+	return errNotRunning
+}
+
+// skip leaves a ref whose unit is not running (installed and not started,
+// or ship stop) alone: updating would start it. Its check clock starts
+// over, silently, so a later failure is not dated from before the stop.
+func (r *autoRun) skip(s *state.State, rs *state.RefState) {
+	fmt.Fprintf(r.a.Out, "%s: not running, skipped\n", rs.Unit)
+	if rs.CheckFailingSince.IsZero() && rs.CheckNotifiedAt.IsZero() {
+		return
+	}
+	rs.CheckFailingSince, rs.CheckNotifiedAt = time.Time{}, time.Time{}
+	if err := r.a.State.Save(s); err != nil {
+		fmt.Fprintf(r.a.Err, "%s: %v\n", rs.Unit, err)
+	}
+}
+
 // update runs one ref's update, classifies the result, saves the state and
-// sends what it calls for. An interrupt is returned: it ends the run. So is
-// a state that cannot be saved after the host was changed: carrying on
-// would act on a state that no longer matches the host.
+// sends what it calls for. A ref whose unit is not running, before the
+// fetch or right before the swap, is skipped. An interrupt is returned: it
+// ends the run. So is a state that cannot be saved after the host was
+// changed: carrying on would act on a state that no longer matches the host.
 func (r *autoRun) update(s *state.State, st store.Store, t autoTarget) error {
 	a, rs := r.a, t.rs
+	err := r.running(rs.Unit)
+	if errors.Is(err, errNotRunning) {
+		r.skip(s, rs)
+		return nil
+	}
 	r.refs++
 	before, old := *rs, rs.Version
 	var (
 		rel     release.Release
 		outcome updateOutcome
+		ref     layout.Ref
 	)
-	ref, err := layout.ParseRef(t.key)
 	if err == nil {
-		rel, outcome, err = a.updateRef(r.ctx, st, ref, t.service, rs, rs.Channel, nil)
+		ref, err = layout.ParseRef(t.key)
+	}
+	if err == nil {
+		rel, outcome, err = a.updateRef(r.ctx, st, ref, t.service, rs, rs.Channel, updateHooks{
+			beforeSwap: func() error { return r.running(rs.Unit) },
+		})
+	}
+	if errors.Is(err, errNotRunning) { // stopped while the release was fetched
+		r.refs--
+		r.skip(s, rs)
+		return nil
 	}
 	// A command killed by the interrupt fails with its own error (signal:
 	// killed), not context.Canceled.
@@ -272,17 +313,12 @@ func (r *autoRun) update(s *state.State, st store.Store, t autoTarget) error {
 			failed = true
 		}
 	}
-	if saveErr != nil && err == nil && outcome != upToDate {
-		// The host runs the new build but state still names the old one.
-		// The next run finds it live and only records it; until then the
-		// halt message replaces Updated (and the clock messages, which the
-		// unsaved state repeats next run).
-		r.failed++
-		r.notify(notify.Message{
-			Title: fmt.Sprintf("%s updated to %s but the state could not be saved; automatic updates halted", what, rs.Version),
-			Body:  saveErr.Error(),
-		})
-		return fmt.Errorf("%s: updated to %s but the state could not be saved: %w", rs.Unit, rs.Version, saveErr)
+	if err == nil && outcome != upToDate {
+		if saveErr == nil {
+			a.clearPending(t.service, t.key)
+		} else {
+			return r.halt(t, rs, what, outcome, saveErr)
+		}
 	}
 	if updated != nil {
 		msgs = append(msgs, *updated)
@@ -310,6 +346,30 @@ func (r *autoRun) update(s *state.State, st store.Store, t autoTarget) error {
 		r.failed++
 	}
 	return nil
+}
+
+// halt ends the run after an update whose state could not be saved: the
+// host runs the new build but state still names the old one. A swap is
+// remembered as pending, so the next run (or ship update) only records it,
+// and announced once, when the pending record is new; the halt message
+// replaces Updated and the clock messages, which the unsaved state repeats
+// next run. A pending build that was recorded again and still not saved is
+// not announced again.
+func (r *autoRun) halt(t autoTarget, rs *state.RefState, what string, outcome updateOutcome, saveErr error) error {
+	r.failed++
+	if outcome == swapped {
+		written, err := r.a.setPending(pendingFor(t.service, t.key, rs))
+		if err != nil {
+			fmt.Fprintf(r.a.Err, "%s: remember the update: %v\n", rs.Unit, err)
+		}
+		if written || err != nil {
+			r.notify(notify.Message{
+				Title: fmt.Sprintf("%s updated to %s but the state could not be saved; automatic updates halted", what, rs.Version),
+				Body:  saveErr.Error(),
+			})
+		}
+	}
+	return fmt.Errorf("%s: updated to %s but the state could not be saved: %w", rs.Unit, rs.Version, saveErr)
 }
 
 // failedUpdate reports whether err is a failed update rather than a failed
@@ -354,7 +414,7 @@ func (r *autoRun) observeRun(reason string) {
 	c := failClock{Since: prev.FailingSince, Notified: prev.NotifiedAt}
 	since := c.Since
 	ev := c.observe(r.now, reason != "")
-	next := runClock{FailingSince: c.Since, NotifiedAt: c.Notified, Reason: reason}
+	next := runClock{FailingSince: c.Since, NotifiedAt: c.Notified, Reason: reason, Pending: prev.Pending}
 	if next != prev || broken {
 		if err := next.save(path); err != nil {
 			fmt.Fprintf(r.a.Err, "warning: %v\n", err)
@@ -368,6 +428,20 @@ func (r *autoRun) observeRun(reason string) {
 		r.notify(notify.Message{Title: fmt.Sprintf("automatic updates still can't run since %s (%s)", clockTime(c.Since), minutes(r.now.Sub(c.Since))), Body: reason})
 	case clockRecovered:
 		r.notify(notify.Message{Title: fmt.Sprintf("automatic updates running again, were failing since %s (%s)", clockTime(since), minutes(r.now.Sub(since)))})
+	}
+}
+
+// resetRunClock starts the run clock over, silently, for a run with nothing
+// to update; a pending record is kept.
+func (r *autoRun) resetRunClock() {
+	path := r.a.RunClockPath
+	c, err := loadRunClock(path)
+	if err != nil || (c.FailingSince.IsZero() && c.NotifiedAt.IsZero() && c.Reason == "") {
+		return
+	}
+	c.FailingSince, c.NotifiedAt, c.Reason = time.Time{}, time.Time{}, ""
+	if err := c.save(path); err != nil {
+		fmt.Fprintf(r.a.Err, "warning: %v\n", err)
 	}
 }
 
