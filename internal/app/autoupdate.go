@@ -185,6 +185,7 @@ func (r *autoRun) update(s *state.State, st store.Store, t autoTarget) error {
 	what := fmt.Sprintf("%s (%s)", rs.Unit, rs.Channel)
 	var msgs []notify.Message
 	failed, purge := false, false
+	stopped := "" // a failed update's title, without the auto-update note
 	switch {
 	case err == nil:
 		msgs = r.checkClock(rs, what, nil)
@@ -193,15 +194,16 @@ func (r *autoRun) update(s *state.State, st store.Store, t autoTarget) error {
 			msgs = append(msgs, notify.Message{Title: fmt.Sprintf("%s %s \u2192 %s%s", what, old, rs.Version, republished(old, rs))})
 			purge = true
 		}
-	case errors.Is(err, context.Canceled):
-		return err
 	case errors.Is(err, host.ErrRevertFailed):
+		// Checked before an interrupt: the service is down whatever cut the
+		// run short, and this is the one message that must not be lost.
 		failed = true
 		stopAutoUpdate(rs, r.now)
-		msgs = []notify.Message{{
-			Title: fmt.Sprintf("%s is DOWN \u2014 update to %s failed and rollback to %s failed; auto-update stopped", rs.Unit, rel.Version, old),
-			Body:  err.Error(),
-		}}
+		stopped = fmt.Sprintf("%s is DOWN \u2014 update to %s failed and rollback to %s failed", rs.Unit, rel.Version, old)
+	case errors.Is(err, context.Canceled):
+		// The host restored the previous pair: auto-update stays on, quietly.
+		fmt.Fprintf(a.Err, "%s: %v\n", rs.Unit, err)
+		return err
 	case failedUpdate(err):
 		failed = true
 		stopAutoUpdate(rs, r.now)
@@ -209,10 +211,7 @@ func (r *autoRun) update(s *state.State, st store.Store, t autoTarget) error {
 		if rel.Version != "" {
 			build += " " + rel.Version
 		}
-		msgs = []notify.Message{{
-			Title: fmt.Sprintf("%s %s failed, still on %s; auto-update stopped", what, build, old),
-			Body:  err.Error(),
-		}}
+		stopped = fmt.Sprintf("%s %s failed, still on %s", what, build, old)
 	default: // nothing was installed: the release could not be checked
 		failed = true
 		msgs = r.checkClock(rs, what, err)
@@ -221,17 +220,31 @@ func (r *autoRun) update(s *state.State, st store.Store, t autoTarget) error {
 		fmt.Fprintf(a.Err, "%s: %v\n", rs.Unit, err)
 	}
 
+	var saveErr error
 	if *rs != before {
-		if err := a.State.Save(s); err != nil {
-			fmt.Fprintf(a.Err, "%s: %v\n", rs.Unit, err)
+		if saveErr = a.State.Save(s); saveErr != nil {
+			fmt.Fprintf(a.Err, "%s: %v\n", rs.Unit, saveErr)
 			failed = true
 		}
+	}
+	if stopped != "" {
+		m := notify.Message{Title: stopped + "; auto-update stopped", Body: err.Error()}
+		if saveErr != nil {
+			m = notify.Message{
+				Title: stopped,
+				Body:  fmt.Sprintf("auto-update could not be stopped: saving the state failed: %v\n\n%v", saveErr, err),
+			}
+		}
+		msgs = append(msgs, m)
 	}
 	for _, m := range msgs {
 		r.notify(m)
 	}
 	if purge && !r.purge(s.Services[t.service], rs.Unit) {
 		failed = true
+	}
+	if errors.Is(err, context.Canceled) {
+		return err // reached only after a Down: the run still ends here
 	}
 	if failed {
 		r.failed++
@@ -315,10 +328,19 @@ func (r *autoRun) purge(svc *state.Service, unit string) bool {
 	return true
 }
 
+// notifyTimeout bounds a send made after the run was interrupted.
+const notifyTimeout = 30 * time.Second
+
 // notify sends m; a send that fails is logged and counted, never retried
-// on a later run.
+// on a later run. An interrupted run still sends, within notifyTimeout.
 func (r *autoRun) notify(m notify.Message) {
-	if err := r.n.Notify(r.ctx, m); err != nil {
+	ctx := r.ctx
+	if ctx.Err() != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), notifyTimeout)
+		defer cancel()
+	}
+	if err := r.n.Notify(ctx, m); err != nil {
 		fmt.Fprintf(r.a.Err, "notification %q not sent: %v\n", m.Title, err)
 		r.unsent++
 	}

@@ -210,8 +210,11 @@ type fakeNotifier struct {
 	err error
 }
 
-func (f *fakeNotifier) Notify(_ context.Context, m notify.Message) error {
+func (f *fakeNotifier) Notify(ctx context.Context, m notify.Message) error {
 	f.got = append(f.got, m)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return f.err
 }
 
@@ -463,12 +466,50 @@ func TestAutoUpdateInterruptKeepsAutoUpdate(t *testing.T) {
 	err := f.app.AutoUpdate(ctx)
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Empty(t, f.n.got)
+	assert.Contains(t, f.errOut.String(), "econumo-beta: ")
 	rs := f.ref(t, "econumo-beta")
 	assert.True(t, rs.AutoUpdate)
 	assert.True(t, rs.AutoUpdateStoppedAt.IsZero())
 	assert.Equal(t, "1.4.0", rs.Version)
 	assert.Equal(t, "1.5.0", f.ref(t, "econumo-z").Version, "the run stops at the interrupt")
 	assert.Equal(t, 0, restarts(f.sys.Calls, "econumo-z"))
+}
+
+func TestAutoUpdateInterruptedRevertFailedSendsDown(t *testing.T) {
+	f := autoEnv(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, f.app.Install(ctx, app.InstallArgs{Ref: "econumo", Service: "econumo-z", Version: "dev", AutoUpdate: true}))
+	publish(t, f.store, "econumo", "1.6.0", []string{"dev"}, true, "econumo")
+	f.errOut.Reset()
+	// SIGTERM during the health check, and the restored pair does not come up.
+	f.sys.ActiveAfterRestart = func(string) bool {
+		cancel()
+		return false
+	}
+
+	err := f.app.AutoUpdate(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Len(t, f.n.got, 1, "the Down message is sent on an interrupted run")
+	assert.Equal(t, "econumo-beta is DOWN \u2014 update to 1.6.0 failed and rollback to 1.4.0 failed; auto-update stopped", f.n.got[0].Title)
+	rs := f.ref(t, "econumo-beta")
+	assert.False(t, rs.AutoUpdate)
+	assert.True(t, rs.AutoUpdateStoppedAt.Equal(later))
+	assert.True(t, f.ref(t, "econumo-z").AutoUpdate, "the run ends after the interrupt")
+	assert.Equal(t, "1.5.0", f.ref(t, "econumo-z").Version)
+	assert.Contains(t, f.errOut.String(), "econumo-beta: ")
+}
+
+func TestAutoUpdateStopNotSavedIsNotClaimed(t *testing.T) {
+	f := autoEnv(t)
+	f.sys.ActiveAfterRestart = func(string) bool { return false }
+	readOnlyStateDir(t, f.env)
+
+	require.Error(t, f.app.AutoUpdate(context.Background()))
+	require.Len(t, f.n.got, 1)
+	assert.Equal(t, "econumo-beta is DOWN \u2014 update to 1.5.0 failed and rollback to 1.4.0 failed", f.n.got[0].Title)
+	assert.Contains(t, f.n.got[0].Body, "auto-update could not be stopped: saving the state failed")
+	assert.Contains(t, f.n.got[0].Body, "did not come back up")
 }
 
 func TestAutoUpdateCantCheckAfterOneHour(t *testing.T) {
