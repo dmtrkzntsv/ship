@@ -503,3 +503,95 @@ func TestWaitHealthyDefaultTick(t *testing.T) {
 	require.NoError(t, h.WaitHealthy(context.Background(), "u"))
 	assert.Equal(t, []string{"IsActive u"}, fs.Calls)
 }
+
+func TestUpdateBadUnitIsBadBuild(t *testing.T) {
+	t.Run("template", func(t *testing.T) {
+		h, _ := installed(t)
+		f := newRelease(t, "new", "unit-new")
+		require.NoError(t, os.WriteFile(f.Unit, []byte("ExecStart={{NOPE}}\n"), 0o644))
+		err := h.Update(context.Background(), target(f))
+		assert.ErrorIs(t, err, host.ErrBadBuild)
+		assert.NotErrorIs(t, err, host.ErrRolledBack)
+	})
+	t.Run("does not verify", func(t *testing.T) {
+		h, fs := installed(t)
+		fs.VerifyErr = errors.New("bad unit")
+		err := h.Update(context.Background(), target(newRelease(t, "new", "unit-new")))
+		assert.ErrorIs(t, err, host.ErrBadBuild)
+		assert.ErrorContains(t, err, "does not verify")
+	})
+}
+
+func TestUpdateHealthFailIsRolledBack(t *testing.T) {
+	h, fs := installed(t)
+	fs.ActiveAfterRestart = activeUnless(t, h, "new")
+	err := h.Update(context.Background(), target(newRelease(t, "new", "unit-new")))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, host.ErrRolledBack)
+	assert.NotErrorIs(t, err, host.ErrRevertFailed)
+	assert.NotErrorIs(t, err, host.ErrBadBuild)
+	assert.ErrorContains(t, err, "update failed, previous version restored: ")
+}
+
+func TestUpdateRevertFailIsRevertFailed(t *testing.T) {
+	skipIfRoot(t)
+	h, fs := installed(t)
+	binDir := h.Paths.BinDir("tw")
+	fs.ActiveAfterRestart = func(string) bool {
+		require.NoError(t, os.Chmod(binDir, 0o555)) // the old pair can no longer be restored
+		return false
+	}
+	t.Cleanup(func() { _ = os.Chmod(binDir, 0o755) })
+	err := h.Update(context.Background(), target(newRelease(t, "new", "unit-new")))
+	assert.ErrorIs(t, err, host.ErrRevertFailed)
+	assert.NotErrorIs(t, err, host.ErrRolledBack)
+
+	// Rollback's revert failing (restart of the restored pair) is the same.
+	h2, fs2, tg := updated(t)
+	fs2.RestartErr = errors.New("exit status 1")
+	err = h2.Rollback(context.Background(), "tw", tg.Ref, tg.Unit)
+	assert.ErrorIs(t, err, host.ErrRevertFailed)
+}
+
+func TestUpdateRevertReloadFailIsRevertFailed(t *testing.T) {
+	h, fs := installed(t)
+	fs.ReloadErr = errors.New("reload failed") // fails the update and then its revert
+	err := h.Update(context.Background(), target(newRelease(t, "new", "unit-new")))
+	assert.ErrorIs(t, err, host.ErrRevertFailed)
+	assert.NotErrorIs(t, err, host.ErrRolledBack)
+}
+
+func TestUpdateOldPairNotHealthyIsRevertFailed(t *testing.T) {
+	h, fs := installed(t)
+	fs.ActiveAfterRestart = func(string) bool { return false } // nothing ever comes up
+	fs.Journal = "still down"
+	err := h.Update(context.Background(), target(newRelease(t, "new", "unit-new")))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, host.ErrRevertFailed)
+	assert.NotErrorIs(t, err, host.ErrRolledBack)
+	assert.ErrorContains(t, err, "update failed and the previous version did not come back up (twillingate-sql failed to come up")
+	assert.Equal(t, 2, countCalls(fs.Calls, restartCall))
+}
+
+func TestRollbackOutcomesAreTyped(t *testing.T) {
+	h, fs, tg := updated(t)
+	fs.ActiveAfterRestart = activeUnless(t, h, "old") // the rolled-back-to pair is unhealthy
+	err := h.Rollback(context.Background(), "tw", tg.Ref, tg.Unit)
+	assert.ErrorIs(t, err, host.ErrRolledBack)
+}
+
+func TestUpdateInterruptedKeepsCanceled(t *testing.T) {
+	h, fs := installed(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	fs.ActiveAfterRestart = func(unit string) bool {
+		if string(read(t, h.Paths.Bin("tw", "twillingate-sql"))) == "new" {
+			cancel() // ship is interrupted while the new version is being checked
+		}
+		return true
+	}
+	err := h.Update(ctx, target(newRelease(t, "new", "unit-new")))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.ErrorIs(t, err, host.ErrRolledBack, "the old pair was restored despite the interruption")
+	assert.Equal(t, "old", read(t, h.Paths.Bin("tw", "twillingate-sql")))
+}

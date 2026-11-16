@@ -29,6 +29,19 @@ type Fetched struct {
 // ErrNoUnit is what install maps a Fetched with an empty Unit to.
 var ErrNoUnit = errors.New("project publishes no systemd unit")
 
+// ErrBadBuild marks a fetch that failed because what the store holds is
+// wrong (missing asset or arch, checksum mismatch, malformed or foreign
+// metadata), as opposed to the store being unreachable or the channel absent.
+var ErrBadBuild = errors.New("bad build")
+
+// badBuild keeps err's text and makes errors.Is(.., ErrBadBuild) true.
+func badBuild(err error) error { return classified{err} }
+
+type classified struct{ err error }
+
+func (c classified) Error() string   { return c.err.Error() }
+func (c classified) Unwrap() []error { return []error{c.err, ErrBadBuild} }
+
 // HostArch is the linux arch name of the running binary ("amd64", "arm64", "arm").
 func HostArch() string { return runtime.GOARCH }
 
@@ -47,16 +60,16 @@ func Fetch(ctx context.Context, st store.Store, ref layout.Ref, channel, arch, d
 	}
 	sm, err := sums.Parse(sumsRaw)
 	if err != nil {
-		return Fetched{}, fmt.Errorf("%s%s: %w", prefix, SumsFile, err)
+		return Fetched{}, badBuild(fmt.Errorf("%s%s: %w", prefix, SumsFile, err))
 	}
 
 	asset := ref.Asset()
 	binName := layout.BinaryFile(asset, arch)
 	if _, ok := sm[binName]; !ok {
 		if !hasPrefix(sm, asset+"-linux-") {
-			return Fetched{}, fmt.Errorf("no asset %q in %s/%s", asset, ref.Project, channel)
+			return Fetched{}, badBuild(fmt.Errorf("no asset %q in %s/%s", asset, ref.Project, channel))
 		}
-		return Fetched{}, fmt.Errorf("no linux/%s build", arch)
+		return Fetched{}, badBuild(fmt.Errorf("no linux/%s build", arch))
 	}
 
 	var written []string
@@ -74,13 +87,13 @@ func Fetch(ctx context.Context, st store.Store, ref layout.Ref, channel, arch, d
 		return Fetched{}, fmt.Errorf("%s: %w", ReleaseFile, err)
 	}
 	if err := sm.Verify(ReleaseFile, bytes.NewReader(relRaw)); err != nil {
-		return Fetched{}, err
+		return Fetched{}, badBuild(err)
 	}
 	if err := json.Unmarshal(relRaw, &f.Release); err != nil {
-		return Fetched{}, fmt.Errorf("%s: %w", ReleaseFile, err)
+		return Fetched{}, badBuild(fmt.Errorf("%s: %w", ReleaseFile, err))
 	}
 	if f.Release.Project != ref.Project {
-		return Fetched{}, fmt.Errorf("%s%s names project %q, want %q", prefix, ReleaseFile, f.Release.Project, ref.Project)
+		return Fetched{}, badBuild(fmt.Errorf("%s%s names project %q, want %q", prefix, ReleaseFile, f.Release.Project, ref.Project))
 	}
 
 	fetch := func(name string, mode os.FileMode) (string, error) {
@@ -120,14 +133,33 @@ func download(ctx context.Context, st store.Store, key, path string, mode os.Fil
 	if err != nil {
 		return err
 	}
-	verr := sm.Verify(name, io.TeeReader(body, out))
+	src := &errTrackingReader{r: io.TeeReader(body, out)}
+	verr := sm.Verify(name, src)
 	if cerr := out.Close(); verr == nil {
 		verr = cerr
 	}
 	if verr != nil {
-		return verr
+		if src.err != nil {
+			return verr // the store or the disk failed mid-transfer; the build is not at fault
+		}
+		return badBuild(verr)
 	}
 	return os.Chmod(path, mode) // OpenFile's mode is subject to umask
+}
+
+// errTrackingReader remembers the first error its source returned, other
+// than io.EOF, so a failed transfer can be told from a failed checksum.
+type errTrackingReader struct {
+	r   io.Reader
+	err error
+}
+
+func (e *errTrackingReader) Read(p []byte) (int, error) {
+	n, err := e.r.Read(p)
+	if err != nil && err != io.EOF && e.err == nil {
+		e.err = err
+	}
+	return n, err
 }
 
 // hasPrefix reports whether any file listed in sm starts with prefix.

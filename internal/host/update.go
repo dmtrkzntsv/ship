@@ -2,6 +2,7 @@ package host
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -9,6 +10,27 @@ import (
 
 	"github.com/dmtrkzntsv/ship/internal/layout"
 )
+
+var (
+	// ErrBadBuild marks an update refused because the new release's unit does
+	// not render or does not verify; nothing on the host was changed.
+	ErrBadBuild = errors.New("bad build")
+	// ErrRolledBack marks a failed update or rollback after which the previous
+	// version was restored and is running again.
+	ErrRolledBack = errors.New("rolled back")
+	// ErrRevertFailed marks a failed update or rollback that could not be
+	// undone: the host may be left on the new, broken version.
+	ErrRevertFailed = errors.New("revert failed")
+)
+
+// classified keeps err's text and adds a sentinel to its error chain.
+type classified struct {
+	err      error
+	sentinel error
+}
+
+func (c classified) Error() string   { return c.err.Error() }
+func (c classified) Unwrap() []error { return []error{c.err, c.sentinel} }
 
 // installed is the live binary/unit pair of one ref and its .prev backup.
 type installed struct {
@@ -98,7 +120,7 @@ func (h *Host) renderVerified(ctx context.Context, t Target) ([]byte, error) {
 	}
 	rendered, err := layout.RenderUnit(string(tmpl), h.Paths.Placeholders(t.Service, t.Ref, t.Unit))
 	if err != nil {
-		return nil, err
+		return nil, classified{err, ErrBadBuild}
 	}
 	scratch, err := os.MkdirTemp("", "ship-unit-")
 	if err != nil {
@@ -110,7 +132,7 @@ func (h *Host) renderVerified(ctx context.Context, t Target) ([]byte, error) {
 		return nil, err
 	}
 	if err := h.Sys.VerifyUnit(ctx, staged); err != nil {
-		return nil, fmt.Errorf("unit %s.service does not verify: %w", t.Unit, err)
+		return nil, classified{fmt.Errorf("unit %s.service does not verify: %w", t.Unit, err), ErrBadBuild}
 	}
 	return []byte(rendered), nil
 }
@@ -132,16 +154,20 @@ func (h *Host) activate(ctx context.Context, unit string) error {
 // if ctx was cancelled, so an interrupted run does not leave the new pair.
 func (h *Host) revert(ctx context.Context, in installed, undo func() error, op string, cause error) error {
 	ctx = context.WithoutCancel(ctx)
+	failed := func(err error) error { return classified{err, ErrRevertFailed} }
 	if err := undo(); err != nil {
-		return fmt.Errorf("%s failed and restoring the previous binary and unit failed too (%v): %w", op, err, cause)
+		return failed(fmt.Errorf("%s failed and restoring the previous binary and unit failed too (%v): %w", op, err, cause))
 	}
 	if err := h.Sys.DaemonReload(ctx); err != nil {
-		return fmt.Errorf("%s failed; previous binary and unit restored but daemon-reload failed (%v): %w", op, err, cause)
+		return failed(fmt.Errorf("%s failed; previous binary and unit restored but daemon-reload failed (%v): %w", op, err, cause))
 	}
 	if err := h.Sys.Systemctl(ctx, "restart", in.unit); err != nil {
-		return fmt.Errorf("%s failed; previous binary and unit restored but restarting %s failed (%v): %w", op, in.unit, err, cause)
+		return failed(fmt.Errorf("%s failed; previous binary and unit restored but restarting %s failed (%v): %w", op, in.unit, err, cause))
 	}
-	return fmt.Errorf("%s failed, previous version restored: %w", op, cause)
+	if err := h.WaitHealthy(ctx, in.unit); err != nil {
+		return failed(fmt.Errorf("%s failed and the previous version did not come back up (%v): %w", op, err, cause))
+	}
+	return classified{fmt.Errorf("%s failed, previous version restored: %w", op, cause), ErrRolledBack}
 }
 
 // backupSet is a staged copy of a live binary/unit pair, held in temp

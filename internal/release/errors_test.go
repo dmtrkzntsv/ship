@@ -159,3 +159,103 @@ func TestPublishFolderCheckStoreErrors(t *testing.T) {
 		})
 	}
 }
+
+// replaceReleaseJSON swaps release.json for data and lists it in SHA256SUMS,
+// so only its content is wrong.
+func replaceReleaseJSON(t *testing.T, st *storetest.Mem, project string, data []byte) {
+	t.Helper()
+	key := project + "/latest/"
+	o := st.Objects[key+"release.json"]
+	o.Data = data
+	st.Objects[key+"release.json"] = o
+	sm, err := sumsOf(st.Objects[key+"SHA256SUMS"].Data)
+	require.NoError(t, err)
+	sm["release.json"] = hexSum(data)
+	so := st.Objects[key+"SHA256SUMS"]
+	so.Data = sm.Marshal()
+	st.Objects[key+"SHA256SUMS"] = so
+}
+
+func TestFetchBadBuildErrors(t *testing.T) {
+	econumo := func(t *testing.T) *storetest.Mem {
+		return publishFixture(t, "econumo", "econumo-linux-amd64", "econumo-linux-arm64", "econumo.service")
+	}
+	for _, tc := range []struct {
+		name string
+		arch string
+		ref  layout.Ref
+		set  func(t *testing.T) *storetest.Mem
+	}{
+		{"checksum mismatch", "amd64", layout.Ref{Project: "econumo"}, func(t *testing.T) *storetest.Mem {
+			st := econumo(t)
+			o := st.Objects["econumo/latest/econumo-linux-amd64"]
+			o.Data = append([]byte("x"), o.Data...)
+			st.Objects["econumo/latest/econumo-linux-amd64"] = o
+			return st
+		}},
+		{"tampered release.json", "amd64", layout.Ref{Project: "econumo"}, func(t *testing.T) *storetest.Mem {
+			st := econumo(t)
+			o := st.Objects["econumo/latest/release.json"]
+			o.Data = append([]byte(" "), o.Data...)
+			st.Objects["econumo/latest/release.json"] = o
+			return st
+		}},
+		{"no arch", "arm", layout.Ref{Project: "econumo"}, econumo},
+		{"no asset", "amd64", layout.Ref{Project: "econumo", Component: "agent"}, econumo},
+		{"wrong project", "amd64", layout.Ref{Project: "econumo"}, func(t *testing.T) *storetest.Mem {
+			st := econumo(t)
+			replaceReleaseJSON(t, st, "econumo", []byte(`{"project":"other","version":"v1","published_at":"2026-10-29T12:00:00Z"}`))
+			return st
+		}},
+		{"malformed release.json", "amd64", layout.Ref{Project: "econumo"}, func(t *testing.T) *storetest.Mem {
+			st := econumo(t)
+			replaceReleaseJSON(t, st, "econumo", []byte("not json"))
+			return st
+		}},
+		{"malformed SHA256SUMS", "amd64", layout.Ref{Project: "econumo"}, func(t *testing.T) *storetest.Mem {
+			st := econumo(t)
+			o := st.Objects["econumo/latest/SHA256SUMS"]
+			o.Data = []byte("garbage\n")
+			st.Objects["econumo/latest/SHA256SUMS"] = o
+			return st
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			_, err := release.Fetch(context.Background(), tc.set(t), tc.ref, "latest", tc.arch, dir)
+			require.Error(t, err)
+			assert.ErrorIs(t, err, release.ErrBadBuild)
+			assert.NotEqual(t, release.ErrBadBuild.Error(), err.Error(), "the original text is kept")
+			assert.Empty(t, dirFiles(t, dir))
+		})
+	}
+}
+
+func TestFetchChannelNotFoundIsNotBadBuild(t *testing.T) {
+	st := publishFixture(t, "econumo", "econumo-linux-amd64", "econumo-linux-arm64")
+	_, err := release.Fetch(context.Background(), st, layout.Ref{Project: "econumo"}, "v9", "amd64", t.TempDir())
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, release.ErrBadBuild)
+}
+
+func TestFetchStoreErrorIsNotBadBuild(t *testing.T) {
+	files := []string{"econumo-linux-amd64", "econumo-linux-arm64", "econumo.service"}
+	for name, set := range map[string]func(*faultyStore){
+		"get SHA256SUMS":     func(f *faultyStore) { f.getErr = map[string]error{"econumo/latest/SHA256SUMS": errBoom} },
+		"get release.json":   func(f *faultyStore) { f.getErr = map[string]error{"econumo/latest/release.json": errBoom} },
+		"read release.json":  func(f *faultyStore) { f.badBody = map[string]error{"econumo/latest/release.json": errBoom} },
+		"get binary":         func(f *faultyStore) { f.getErr = map[string]error{"econumo/latest/econumo-linux-amd64": errBoom} },
+		"read binary":        func(f *faultyStore) { f.badBody = map[string]error{"econumo/latest/econumo-linux-amd64": errBoom} },
+		"read unit mid-copy": func(f *faultyStore) { f.badBody = map[string]error{"econumo/latest/econumo.service": errBoom} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := &faultyStore{Mem: publishFixture(t, "econumo", files...)}
+			set(f)
+			dir := t.TempDir()
+			_, err := release.Fetch(context.Background(), f, layout.Ref{Project: "econumo"}, "latest", "amd64", dir)
+			require.ErrorIs(t, err, errBoom)
+			assert.NotErrorIs(t, err, release.ErrBadBuild)
+			assert.Empty(t, dirFiles(t, dir))
+		})
+	}
+}
