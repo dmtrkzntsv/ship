@@ -1,7 +1,9 @@
 package host
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -76,9 +78,10 @@ func (h *Host) Update(ctx context.Context, t Target) error {
 	if err := copyFileAtomic(t.Fetched.Binary, in.bin, binMode); err != nil {
 		return err // the atomic copy left the live binary as it was
 	}
-	if err := writeFileAtomic(in.unitFile, rendered, unitMode); err != nil {
+	if err := writeUnitFile(in.unitFile, rendered, unitMode); err != nil {
 		if rerr := copyFileAtomic(b.bin, in.bin, binMode); rerr != nil {
-			return fmt.Errorf("%w; restoring %s also failed: %v", err, in.bin, rerr)
+			// The new binary is live with the old unit: a mixed pair.
+			return classified{fmt.Errorf("%w; restoring %s also failed: %v", err, in.bin, rerr), ErrRevertFailed}
 		}
 		return err
 	}
@@ -91,6 +94,62 @@ func (h *Host) Update(ctx context.Context, t Target) error {
 		fmt.Fprintf(h.Out, "warning: %v; rollback of %s is unavailable until the next update\n", err, in.unit)
 	}
 	return nil
+}
+
+// writeUnitFile writes the new unit during Update; tests replace it.
+var writeUnitFile = writeFileAtomic
+
+// Matches reports whether t's release is already live on the host: the
+// installed binary has the fetched binary's SHA-256 and the installed unit
+// is the one t's template renders to. Updating then would only restart the
+// unit and overwrite the rollback target with the running build. A missing
+// live file or a template that does not render is no match (Update reports
+// those).
+func (h *Host) Matches(t Target) (bool, error) {
+	in := h.installed(t.Service, t.Ref, t.Unit)
+	want, err := fileSum(t.Fetched.Binary)
+	if err != nil {
+		return false, err
+	}
+	tmpl, err := os.ReadFile(t.Fetched.Unit)
+	if err != nil {
+		return false, fmt.Errorf("read unit template: %w", err)
+	}
+	have, err := fileSum(in.bin)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil || have != want {
+		return false, err
+	}
+	rendered, err := layout.RenderUnit(string(tmpl), h.Paths.Placeholders(t.Service, t.Ref, t.Unit))
+	if err != nil {
+		return false, nil
+	}
+	live, err := os.ReadFile(in.unitFile)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return bytes.Equal(live, []byte(rendered)), nil
+}
+
+// fileSum is the SHA-256 of the file at path.
+func fileSum(path string) ([sha256.Size]byte, error) {
+	var sum [sha256.Size]byte
+	f, err := os.Open(path)
+	if err != nil {
+		return sum, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return sum, err
+	}
+	copy(sum[:], h.Sum(nil))
+	return sum, nil
 }
 
 // Rollback swaps the ref's binary and unit with their .prev copies, so the

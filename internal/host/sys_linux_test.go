@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -101,6 +102,18 @@ func TestLinuxSysCommandMissing(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "systemctl daemon-reload: ")
 	assert.Contains(t, err.Error(), "executable file not found")
+}
+
+func TestLinuxSysInterruptedCommandIsCanceled(t *testing.T) {
+	dir := t.TempDir()
+	// Spins until killed; only shell builtins are on PATH.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "systemctl"), []byte("#!/bin/sh\nwhile :; do :; done\n"), 0o755))
+	t.Setenv("PATH", dir)
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+	err := host.NewSys().Systemctl(ctx, "restart", "tw")
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Contains(t, err.Error(), "systemctl restart tw: ")
 }
 
 func TestLinuxSysIsActive(t *testing.T) {

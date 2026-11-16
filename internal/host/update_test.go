@@ -595,3 +595,71 @@ func TestUpdateInterruptedKeepsCanceled(t *testing.T) {
 	assert.ErrorIs(t, err, host.ErrRolledBack, "the old pair was restored despite the interruption")
 	assert.Equal(t, "old", read(t, h.Paths.Bin("tw", "twillingate-sql")))
 }
+
+func TestMatches(t *testing.T) {
+	h, _ := installed(t)
+	same := target(newRelease(t, "old", "unit-old"))
+	ok, err := h.Matches(same)
+	require.NoError(t, err)
+	assert.True(t, ok, "the installed binary and unit")
+
+	ok, err = h.Matches(target(newRelease(t, "new", "unit-old")))
+	require.NoError(t, err)
+	assert.False(t, ok, "another binary")
+
+	ok, err = h.Matches(target(newRelease(t, "old", "unit-new")))
+	require.NoError(t, err)
+	assert.False(t, ok, "another unit")
+
+	bad := newRelease(t, "old", "unit-old")
+	require.NoError(t, os.WriteFile(bad.Unit, []byte("ExecStart={{NOPE}}\n"), 0o644))
+	ok, err = h.Matches(target(bad))
+	require.NoError(t, err)
+	assert.False(t, ok, "a unit that does not render is left to Update")
+
+	require.NoError(t, os.Remove(h.Paths.Bin("tw", "twillingate-sql")))
+	ok, err = h.Matches(same)
+	require.NoError(t, err)
+	assert.False(t, ok, "a missing live binary")
+}
+
+func TestMatchesReadErrors(t *testing.T) {
+	h, _ := installed(t)
+	missing := newRelease(t, "old", "unit-old")
+	missing.Binary = filepath.Join(t.TempDir(), "gone")
+	_, err := h.Matches(target(missing))
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	noUnit := newRelease(t, "old", "unit-old")
+	noUnit.Unit = filepath.Join(t.TempDir(), "gone")
+	_, err = h.Matches(target(noUnit))
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	// The live unit is a directory: it cannot be read.
+	h2, _ := installed(t)
+	unit := h2.Paths.UnitPath("twillingate-sql")
+	require.NoError(t, os.Remove(unit))
+	require.NoError(t, os.Mkdir(unit, 0o755))
+	_, err = h2.Matches(target(newRelease(t, "old", "unit-old")))
+	require.Error(t, err)
+}
+
+func TestUpdateUnitWriteAndBinaryRestoreFailIsRevertFailed(t *testing.T) {
+	skipIfRoot(t)
+	h, fs := installed(t)
+	binDir := h.Paths.BinDir("tw")
+	// The unit cannot be written, and by then /opt/S has turned read-only,
+	// so the old binary cannot be put back: a mixed pair is live.
+	restore := host.SetWriteUnitFile(func(string, []byte, os.FileMode) error {
+		require.NoError(t, os.Chmod(binDir, 0o555))
+		return errors.New("disk full")
+	})
+	defer restore()
+	t.Cleanup(func() { _ = os.Chmod(binDir, 0o755) })
+
+	err := h.Update(context.Background(), target(newRelease(t, "new", "unit-new")))
+	require.ErrorIs(t, err, host.ErrRevertFailed)
+	assert.Contains(t, err.Error(), "disk full")
+	assert.Contains(t, err.Error(), "also failed")
+	assert.False(t, hasCallPrefix(fs.Calls, "systemctl"), "no restart: %v", fs.Calls)
+}

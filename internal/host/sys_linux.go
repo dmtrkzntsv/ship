@@ -4,6 +4,7 @@ package host
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -19,9 +20,14 @@ func NewSys() Sys { return linuxSys{} }
 // linuxSys drives systemd and the user database through the system tools.
 type linuxSys struct{}
 
-// run executes name with args; a failure includes the command's output.
+// run executes name with args; a failure includes the command's output. A
+// command killed because ctx ended carries ctx's error, so an interrupt is
+// told apart from a failed command.
 func run(ctx context.Context, name string, args ...string) error {
 	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	if err != nil && ctx.Err() != nil && !errors.Is(err, ctx.Err()) {
+		err = fmt.Errorf("%w (%w)", err, ctx.Err())
+	}
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		if msg != "" {

@@ -32,6 +32,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+TimeoutStartSec=30min
 ExecStart=%s update --auto
 `, shipPath))
 }
