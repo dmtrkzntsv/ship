@@ -5,6 +5,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/dmtrkzntsv/ship/internal/app"
 )
 
 func TestNotifyTest(t *testing.T) {
@@ -12,6 +14,9 @@ func TestNotifyTest(t *testing.T) {
 	oldRoot, oldEnv := isRoot, getenv
 	t.Cleanup(func() { isRoot, getenv = oldRoot, oldEnv })
 	getenv = func(string) string { return "" }
+	oldUnreadable := systemConfigUnreadable
+	t.Cleanup(func() { systemConfigUnreadable = oldUnreadable })
+	systemConfigUnreadable = func() bool { return true }
 
 	isRoot = func() bool { return true }
 	_, _, err := runCLI(t, "notify", "test")
@@ -21,6 +26,12 @@ func TestNotifyTest(t *testing.T) {
 	_, _, err = runCLI(t, "notify", "test")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "try: sudo ship notify test")
+
+	// A missing or readable host config is not blamed on permissions.
+	systemConfigUnreadable = func() bool { return false }
+	_, _, err = runCLI(t, "notify", "test")
+	assert.ErrorIs(t, err, app.ErrNoNotifyURL)
+	assert.NotContains(t, err.Error(), "readable only by root")
 
 	env.cfg.Notify.URL = "ntfy://ntfy.sh/topic"
 	out, errOut, err := runCLI(t, "notify", "test")

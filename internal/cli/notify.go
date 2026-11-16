@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -11,10 +12,16 @@ import (
 	"github.com/dmtrkzntsv/ship/internal/config"
 )
 
-// isRoot and getenv are variables so tests can pretend.
+// isRoot, getenv and systemConfigUnreadable are variables so tests can pretend.
 var (
 	isRoot = func() bool { return os.Geteuid() == 0 }
 	getenv = os.Getenv
+	// systemConfigUnreadable reports whether the host config exists but
+	// cannot be read by this user (it is root-only).
+	systemConfigUnreadable = func() bool {
+		_, err := os.ReadFile(config.SystemPath)
+		return errors.Is(err, fs.ErrPermission)
+	}
 )
 
 func newNotifyCmd() *cobra.Command {
@@ -38,7 +45,7 @@ func newNotifyCmd() *cobra.Command {
 			if !isRoot() {
 				// The host config is root-only and silently skipped otherwise;
 				// the timer runs as root and reads only that file.
-				if errors.Is(err, app.ErrNoNotifyURL) {
+				if errors.Is(err, app.ErrNoNotifyURL) && systemConfigUnreadable() {
 					return fmt.Errorf("%w; %s is readable only by root, try: sudo ship notify test", err, config.SystemPath)
 				}
 				fmt.Fprintf(cmd.ErrOrStderr(), "note: not root, so this tested the settings readable as you; the auto-update timer runs as root and reads only %s (try: sudo ship notify test)\n", config.SystemPath)
