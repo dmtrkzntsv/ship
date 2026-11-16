@@ -136,6 +136,9 @@ func (a *App) Update(ctx context.Context, args UpdateArgs) error {
 		return fmt.Errorf("%s was updated to %s but the state could not be saved: %w", rs.Unit, rs.Version, err)
 	}
 	a.clearPending(service, ref.String())
+	if outcome == recorded {
+		fmt.Fprintf(a.Out, "%s: already installed %s, state recorded\n", rs.Unit, rs.Version)
+	}
 	var errs []error
 	if enabling {
 		if err := a.enableAutoUpdate(ctx); err != nil {
@@ -229,7 +232,6 @@ func (a *App) updateRef(ctx context.Context, st store.Store, ref layout.Ref, ser
 			return f.Release, upToDate, hostError{err}
 		}
 		if live {
-			fmt.Fprintf(a.Out, "%s: already installed %s, state recorded\n", rs.Unit, f.Release.Version)
 			rs.Channel, rs.Version, rs.PublishedAt = channel, pending.Version, pending.PublishedAt
 			rs.PrevVersion, rs.PrevPublishedAt = pending.PrevVersion, pending.PrevPublishedAt
 			rs.InstalledAt = a.Now().UTC()
@@ -244,8 +246,14 @@ func (a *App) updateRef(ctx context.Context, st store.Store, ref layout.Ref, ser
 	if err := a.Host.Update(ctx, t); err != nil {
 		return f.Release, upToDate, hostError{err}
 	}
-	rs.Channel, rs.PrevVersion, rs.Version = channel, rs.Version, f.Release.Version
-	rs.PrevPublishedAt, rs.PublishedAt = rs.PublishedAt, f.Release.PublishedAt
+	// The build that became .prev: the state's, unless an earlier swap of
+	// this ref was not saved (its pending record names what ran).
+	curVersion, curPublished := rs.Version, rs.PublishedAt
+	if pending.Service == service && pending.Ref == ref.String() && !pendingHere {
+		curVersion, curPublished = pending.Version, pending.PublishedAt
+	}
+	rs.Channel, rs.PrevVersion, rs.Version = channel, curVersion, f.Release.Version
+	rs.PrevPublishedAt, rs.PublishedAt = curPublished, f.Release.PublishedAt
 	rs.InstalledAt = a.Now().UTC()
 	return f.Release, swapped, nil
 }
@@ -289,7 +297,10 @@ func (a *App) Rollback(ctx context.Context, refArg, serviceArg string) error {
 		stopAutoUpdate(rs, now)
 	}
 	if err := a.State.Save(s); err != nil {
-		return err
+		if wasAuto {
+			return fmt.Errorf("rollback of %s succeeded but the state could not be saved (auto-update not stopped; run: ship update %s --service %s --auto-update=false): %w", rs.Unit, ref, service, err)
+		}
+		return fmt.Errorf("rollback of %s succeeded but the state could not be saved: %w", rs.Unit, err)
 	}
 	fmt.Fprintf(a.Out, "%s: %s -> %s%s\n", rs.Unit, old, rs.Version, republished(old, rs))
 	if wasAuto {

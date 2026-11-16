@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,6 +47,27 @@ func readOnlyStateDir(t *testing.T, e *env) {
 	unlock()
 	require.NoError(t, os.Chmod(dir, 0o555))
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+}
+
+// readOnlyStateOnRestart makes saving the state fail from the first restart
+// on: the run got past its start-of-run save, then the disk turned read-only.
+// It wraps active, the unit's health as ActiveAfterRestart would report it.
+func readOnlyStateOnRestart(t *testing.T, e *env, active func(string) bool) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root can write anywhere")
+	}
+	dir := filepath.Dir(e.app.State.Path)
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	e.sys.ActiveAfterRestart = func(u string) bool {
+		for _, c := range e.sys.Calls {
+			if strings.HasPrefix(c, "systemctl restart ") {
+				require.NoError(t, os.Chmod(dir, 0o555))
+				break
+			}
+		}
+		return active(u)
+	}
 }
 
 func TestCommandsReportLockAndStateErrors(t *testing.T) {

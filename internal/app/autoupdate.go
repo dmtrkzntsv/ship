@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -146,6 +147,13 @@ func (a *App) AutoUpdate(ctx context.Context) error {
 		r.resetRunClock()
 		return nil
 	}
+	// Prove the state can be saved before any ref is touched: every outcome
+	// of an update (a stop, a clock, a new version) must be recorded, or the
+	// next run would repeat it.
+	if err := a.State.Save(s); err != nil {
+		r.observeRun(err.Error())
+		return err
+	}
 	st, err := a.NewStore()
 	if err != nil {
 		r.observeRun(err.Error())
@@ -244,6 +252,9 @@ func (r *autoRun) update(s *state.State, st store.Store, t autoTarget) error {
 	}
 	r.refs++
 	before, old := *rs, rs.Version
+	if p := a.pending(); p.Service == t.service && p.Ref == t.key {
+		old = p.Version // what the host runs: a swap whose save failed
+	}
 	var (
 		rel     release.Release
 		outcome updateOutcome
@@ -276,6 +287,7 @@ func (r *autoRun) update(s *state.State, st store.Store, t autoTarget) error {
 	case err == nil:
 		msgs = r.checkClock(rs, what, nil)
 		if outcome == swapped {
+			old = rs.PrevVersion // the build that became .prev
 			fmt.Fprintf(a.Out, "%s: %s -> %s%s\n", rs.Unit, old, rs.Version, republished(old, rs))
 			updated = &notify.Message{Title: fmt.Sprintf("%s %s \u2192 %s%s", what, old, rs.Version, republished(old, rs))}
 		}
@@ -316,6 +328,9 @@ func (r *autoRun) update(s *state.State, st store.Store, t autoTarget) error {
 	if err == nil && outcome != upToDate {
 		if saveErr == nil {
 			a.clearPending(t.service, t.key)
+			if outcome == recorded {
+				fmt.Fprintf(a.Out, "%s: already installed %s, state recorded\n", rs.Unit, rs.Version)
+			}
 		} else {
 			return r.halt(t, rs, what, outcome, saveErr)
 		}
@@ -405,6 +420,12 @@ func (r *autoRun) checkClock(rs *state.RefState, what string, checkErr error) []
 // never wedges the run.
 func (r *autoRun) observeRun(reason string) {
 	path := r.a.RunClockPath
+	unlock, err := lockRunClock(path)
+	if err != nil {
+		fmt.Fprintf(r.a.Err, "warning: %v\n", err)
+		r.clockUnsaved = true
+		return
+	}
 	prev, err := loadRunClock(path)
 	broken := err != nil
 	if broken {
@@ -421,6 +442,7 @@ func (r *autoRun) observeRun(reason string) {
 			r.clockUnsaved = true
 		}
 	}
+	unlock() // not held while notifying
 	switch ev {
 	case clockFailing:
 		r.notify(notify.Message{Title: "automatic updates can't run since " + clockTime(c.Since), Body: reason})
@@ -435,6 +457,15 @@ func (r *autoRun) observeRun(reason string) {
 // to update; a pending record is kept.
 func (r *autoRun) resetRunClock() {
 	path := r.a.RunClockPath
+	if _, err := os.Stat(path); err != nil {
+		return // no clock: nothing to reset
+	}
+	unlock, err := lockRunClock(path)
+	if err != nil {
+		fmt.Fprintf(r.a.Err, "warning: %v\n", err)
+		return
+	}
+	defer unlock()
 	c, err := loadRunClock(path)
 	if err != nil || (c.FailingSince.IsZero() && c.NotifiedAt.IsZero() && c.Reason == "") {
 		return

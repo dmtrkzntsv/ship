@@ -517,8 +517,7 @@ func TestAutoUpdateInterruptedRevertFailedSendsDown(t *testing.T) {
 
 func TestAutoUpdateStopNotSavedIsNotClaimed(t *testing.T) {
 	f := autoEnv(t)
-	f.sys.ActiveAfterRestart = runningUntilRestart(f)
-	readOnlyStateDir(t, f.env)
+	readOnlyStateOnRestart(t, f.env, runningUntilRestart(f))
 
 	require.Error(t, f.app.AutoUpdate(context.Background()))
 	require.Len(t, f.n.got, 1)
@@ -785,7 +784,7 @@ func TestAutoUpdateStateNotSavedAfterUpdateHalts(t *testing.T) {
 	require.NoError(t, f.app.Install(ctx, app.InstallArgs{Ref: "econumo", Service: "econumo-z", Version: "dev", AutoUpdate: true}))
 	f.sys.Active["econumo-z"] = true
 	publish(t, f.store, "econumo", "1.6.0", []string{"dev"}, true, "econumo")
-	readOnlyStateDir(t, f.env)
+	readOnlyStateOnRestart(t, f.env, func(string) bool { return true })
 	bin := f.app.Host.Paths.Bin("econumo-beta", "econumo")
 	f.out.Reset()
 
@@ -803,18 +802,19 @@ func TestAutoUpdateStateNotSavedAfterUpdateHalts(t *testing.T) {
 	assert.Contains(t, clock, `"pending"`, "the swap is remembered for the next run")
 	assert.Contains(t, clock, `"prev_version": "1.4.0"`)
 
-	// The state still cannot be saved: the pending build is recorded again,
-	// without a restart and without another halt message.
+	// The state still cannot be saved: the run stops at its start (no
+	// restart, no halt message again; the run clock starts failing).
 	f.n.got = nil
 	f.sys.Calls = nil
 	f.at(5 * time.Minute)
 	require.Error(t, f.app.AutoUpdate(ctx))
 	assert.Empty(t, f.n.got)
-	assert.Equal(t, 0, restarts(f.sys.Calls, "econumo-beta"))
-	assert.Contains(t, f.errOut.String(), "create temp state file")
+	assert.Empty(t, f.sys.Calls)
+	assert.Contains(t, readFile(t, f.app.RunClockPath), "create temp state file")
 
 	// Once the state saves, the next run records it and goes on.
 	require.NoError(t, os.Chmod(filepath.Dir(f.app.State.Path), 0o755))
+	f.sys.ActiveAfterRestart = nil
 	f.sys.Calls = nil
 	f.out.Reset()
 	f.at(10 * time.Minute)
@@ -1010,4 +1010,46 @@ func TestTurningAutoUpdateOnWarnsAboutShellConfig(t *testing.T) {
 	require.NoError(t, e.app.Update(ctx, app.UpdateArgs{Ref: "econumo", Service: "econumo-beta", AutoUpdate: ptr(false)}))
 	require.NoError(t, e.app.Install(ctx, app.InstallArgs{Ref: "twillingate", Version: "v2"}))
 	assert.Empty(t, errOut.String())
+}
+
+func TestAutoUpdateStateUnwritableUpdatesNothing(t *testing.T) {
+	f := autoEnv(t)
+	ctx := context.Background()
+	readOnlyStateDir(t, f.env)
+
+	err := f.app.AutoUpdate(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "create temp state file")
+	assert.Empty(t, f.sys.Calls, "no ref is touched")
+	assert.Empty(t, f.n.got)
+	assert.Equal(t, "1.4.0", f.ref(t, "econumo-beta").Version)
+
+	f.at(time.Hour)
+	require.Error(t, f.app.AutoUpdate(ctx))
+	require.Len(t, f.n.got, 1)
+	assert.Equal(t, "automatic updates can't run since "+hm(later), f.n.got[0].Title)
+	assert.Contains(t, f.n.got[0].Body, "create temp state file")
+	assert.Empty(t, f.sys.Calls)
+}
+
+func TestAutoUpdatePendingThenNewerBuild(t *testing.T) {
+	f := autoEnv(t)
+	ctx := context.Background()
+	readOnlyStateOnRestart(t, f.env, func(string) bool { return true })
+	require.Error(t, f.app.AutoUpdate(ctx)) // 1.5.0 live, state on 1.4.0, pending 1.5.0
+	require.NoError(t, os.Chmod(filepath.Dir(f.app.State.Path), 0o755))
+	f.sys.ActiveAfterRestart = nil
+	publish(t, f.store, "econumo", "1.6.0", []string{"dev"}, true, "econumo")
+	f.n.got = nil
+	f.out.Reset()
+	f.at(5 * time.Minute)
+
+	require.NoError(t, f.app.AutoUpdate(ctx))
+	assert.Equal(t, "econumo-beta: 1.5.0 -> 1.6.0\n", f.out.String(), "the old build is the pending one")
+	assert.Equal(t, []string{"econumo-beta (dev) 1.5.0 → 1.6.0"}, f.n.titles())
+	rs := f.ref(t, "econumo-beta")
+	assert.Equal(t, "1.6.0", rs.Version)
+	assert.Equal(t, "1.5.0", rs.PrevVersion, "PrevVersion names what .prev holds")
+	assert.Contains(t, readFile(t, f.app.Host.Paths.Bin("econumo-beta", "econumo")+".prev"), "1.5.0")
+	assert.NotContains(t, readFile(t, f.app.RunClockPath), `"pending"`)
 }

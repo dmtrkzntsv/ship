@@ -1,6 +1,7 @@
 package app
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -69,4 +70,39 @@ func TestRunClockCorruptIsError(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("{nope"), 0o600))
 	_, err := loadRunClock(path)
 	assert.Error(t, err)
+}
+
+func TestRunClockLockSerializesChanges(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "auto-update.json")
+	a := &App{RunClockPath: path, Err: io.Discard}
+	unlock, err := lockRunClock(path)
+	require.NoError(t, err)
+	info, err := os.Stat(path + ".lock")
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+
+	time.AfterFunc(100*time.Millisecond, unlock)
+	start := time.Now()
+	written, err := a.setPending(pendingRecord{Service: "s", Ref: "r", Version: "1"})
+	require.NoError(t, err)
+	assert.True(t, written)
+	assert.GreaterOrEqual(t, time.Since(start), 100*time.Millisecond, "waited for the holder")
+	assert.Equal(t, "1", a.pending().Version)
+}
+
+func TestRunClockLockTimesOut(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "auto-update.json")
+	unlock, err := lockRunClock(path)
+	require.NoError(t, err)
+	defer unlock()
+	old := runClockLockWait
+	runClockLockWait = 50 * time.Millisecond
+	t.Cleanup(func() { runClockLockWait = old })
+	_, err = lockRunClock(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "run clock")
+
+	a := &App{RunClockPath: path, Err: io.Discard}
+	_, err = a.setPending(pendingRecord{Service: "s"})
+	require.Error(t, err)
 }

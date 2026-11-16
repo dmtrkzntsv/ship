@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/dmtrkzntsv/ship/internal/release"
@@ -77,6 +78,11 @@ func (a *App) setPending(p pendingRecord) (written bool, err error) {
 	if a.RunClockPath == "" {
 		return false, errors.New("no run clock file to remember the update in")
 	}
+	unlock, err := lockRunClock(a.RunClockPath)
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
 	c, err := loadRunClock(a.RunClockPath)
 	if err != nil {
 		c = runClock{}
@@ -95,9 +101,15 @@ func (a *App) setPending(p pendingRecord) (written bool, err error) {
 // one; a failure is only a warning (the record no longer matches anything
 // once the state names that build).
 func (a *App) clearPending(service, refKey string) {
-	if a.RunClockPath == "" {
+	if a.RunClockPath == "" || a.pending().Ref == "" {
+		return // nothing to clear: no lock needed
+	}
+	unlock, err := lockRunClock(a.RunClockPath)
+	if err != nil {
+		fmt.Fprintf(a.Err, "warning: %v\n", err)
 		return
 	}
+	defer unlock()
 	c, err := loadRunClock(a.RunClockPath)
 	if err != nil || c.Pending.Service != service || c.Pending.Ref != refKey {
 		return
@@ -106,6 +118,40 @@ func (a *App) clearPending(service, refKey string) {
 	if err := c.save(a.RunClockPath); err != nil {
 		fmt.Fprintf(a.Err, "warning: %v\n", err)
 	}
+}
+
+// runClockLockWait bounds the wait for the run clock's lock, which is held
+// only for one load, change and save.
+var runClockLockWait = 5 * time.Second
+
+// lockRunClock takes the exclusive flock on path+".lock" that every
+// read-modify-write of the run clock file holds: the run that holds the
+// state lock and a run that found it held both write the file.
+func lockRunClock(path string) (unlock func(), err error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, fmt.Errorf("create run clock dir: %w", err)
+	}
+	lp := path + ".lock"
+	fd, err := os.OpenFile(lp, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open run clock lock %s: %w", lp, err)
+	}
+	deadline := time.Now().Add(runClockLockWait)
+	for {
+		err := syscall.Flock(int(fd.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) || !time.Now().Before(deadline) {
+			fd.Close()
+			return nil, fmt.Errorf("lock run clock %s: %w", lp, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return func() {
+		_ = syscall.Flock(int(fd.Fd()), syscall.LOCK_UN)
+		_ = fd.Close()
+	}, nil
 }
 
 // loadRunClock reads the clock file; a missing file is the zero clock.

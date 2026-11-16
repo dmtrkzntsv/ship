@@ -270,6 +270,13 @@ func TestAppUpdateRecordsBuildAlreadyLive(t *testing.T) {
 	bin := e.app.Host.Paths.Bin("econumo-beta", "econumo")
 	prev := readFile(t, bin+".prev")
 
+	// Still unsaveable: recorded in memory only, so nothing is claimed.
+	e.out.Reset()
+	e.sys.Calls = nil
+	require.Error(t, e.app.Update(ctx, app.UpdateArgs{Ref: "econumo", Service: "econumo-beta"}))
+	assert.NotContains(t, e.out.String(), "already installed")
+	assert.NotContains(t, e.sys.Calls, "systemctl restart econumo-beta")
+
 	require.NoError(t, os.Chmod(filepath.Dir(e.app.State.Path), 0o755))
 	e.out.Reset()
 	e.sys.Calls = nil
@@ -307,4 +314,15 @@ func TestAppUpdatePendingRecordForOtherFilesInstalls(t *testing.T) {
 	assert.Contains(t, e.sys.Calls, "systemctl restart econumo-beta")
 	assert.Equal(t, "econumo-beta: 1.4.0 -> 1.5.0\n", e.out.String())
 	assert.NotContains(t, readFile(t, e.app.RunClockPath), `"pending"`)
+}
+
+func TestAppRollbackStateNotSavedSaysSo(t *testing.T) {
+	e := installedEnv(t)
+	ctx := context.Background()
+	require.NoError(t, e.app.Update(ctx, app.UpdateArgs{Ref: "econumo", Service: "econumo-beta", AutoUpdate: ptr(true)}))
+	readOnlyStateDir(t, e)
+	err := e.app.Rollback(ctx, "econumo", "econumo-beta")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rollback of econumo-beta succeeded but the state could not be saved (auto-update not stopped; run: ship update econumo --service econumo-beta --auto-update=false): ")
+	assert.Contains(t, err.Error(), "create temp state file")
 }
