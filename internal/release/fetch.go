@@ -83,13 +83,27 @@ func Fetch(ctx context.Context, st store.Store, ref layout.Ref, channel, arch, d
 		}
 	}()
 
+	// A file that does not verify is a bad build only if SHA256SUMS still
+	// reads as it did: a publish landing mid-fetch replaces it, and the
+	// next try will find a consistent channel.
+	unverified := func(verr error) error {
+		now, err := readAll(ctx, st, prefix+SumsFile)
+		switch {
+		case err != nil:
+			return fmt.Errorf("%w; reading %s%s again: %w", verr, prefix, SumsFile, err)
+		case !bytes.Equal(now, sumsRaw):
+			return fmt.Errorf("%s%s changed during the download; try again", prefix, SumsFile)
+		}
+		return badBuild(verr)
+	}
+
 	f := Fetched{Dir: dir}
 	relRaw, err := readAll(ctx, st, prefix+ReleaseFile)
 	if err != nil {
 		return Fetched{}, fmt.Errorf("%s: %w", ReleaseFile, err)
 	}
 	if err := sm.Verify(ReleaseFile, bytes.NewReader(relRaw)); err != nil {
-		return Fetched{}, badBuild(err)
+		return Fetched{}, unverified(err)
 	}
 	if err := json.Unmarshal(relRaw, &f.Release); err != nil {
 		return Fetched{}, badBuild(fmt.Errorf("%s: %w", ReleaseFile, err))
@@ -102,6 +116,10 @@ func Fetch(ctx context.Context, st store.Store, ref layout.Ref, channel, arch, d
 		path := filepath.Join(dir, name)
 		written = append(written, path)
 		if err := download(ctx, st, prefix+name, path, mode, sm, name); err != nil {
+			var bad errUnverified
+			if errors.As(err, &bad) {
+				return "", unverified(bad.err)
+			}
 			return "", err
 		}
 		return path, nil
@@ -142,12 +160,18 @@ func download(ctx context.Context, st store.Store, key, path string, mode os.Fil
 	case src.err != nil:
 		return verr // the store or the disk failed mid-transfer; the build is not at fault
 	case verr != nil:
-		return badBuild(verr)
+		return errUnverified{verr}
 	case cerr != nil:
 		return cerr // a local write error on close is not the build's fault either
 	}
 	return os.Chmod(path, mode) // OpenFile's mode is subject to umask
 }
+
+// errUnverified is a download that did not match its checksum; Fetch
+// decides whether that makes a bad build.
+type errUnverified struct{ err error }
+
+func (e errUnverified) Error() string { return e.err.Error() }
 
 // errTrackingReader remembers the first error its source returned, other
 // than io.EOF, so a failed transfer can be told from a failed checksum.

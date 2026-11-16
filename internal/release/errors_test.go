@@ -1,6 +1,7 @@
 package release_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -273,4 +274,70 @@ func TestFetchStoreErrorIsNotBadBuild(t *testing.T) {
 			assert.Empty(t, dirFiles(t, dir))
 		})
 	}
+}
+
+// publishingStore is a Mem whose SHA256SUMS reads after the first return
+// later (a publish landed mid-fetch), or fail with laterErr.
+type publishingStore struct {
+	*storetest.Mem
+	key      string
+	later    []byte
+	laterErr error
+	reads    int
+}
+
+func (p *publishingStore) Get(ctx context.Context, key string) (io.ReadCloser, error) {
+	if key == p.key {
+		p.reads++
+		if p.reads > 1 {
+			if p.laterErr != nil {
+				return nil, p.laterErr
+			}
+			return io.NopCloser(bytes.NewReader(p.later)), nil
+		}
+	}
+	return p.Mem.Get(ctx, key)
+}
+
+func TestFetchSumsChangedDuringDownloadIsNotBadBuild(t *testing.T) {
+	for _, tamper := range []string{"econumo/latest/econumo-linux-amd64", "econumo/latest/release.json", "econumo/latest/econumo.service"} {
+		t.Run(filepath.Base(tamper), func(t *testing.T) {
+			mem := publishFixture(t, "econumo", "econumo-linux-amd64", "econumo-linux-arm64", "econumo.service")
+			o := mem.Objects[tamper]
+			o.Data = append([]byte("new "), o.Data...)
+			mem.Objects[tamper] = o
+			st := &publishingStore{Mem: mem, key: "econumo/latest/SHA256SUMS", later: []byte("the new sums\n")}
+			dir := t.TempDir()
+
+			_, err := release.Fetch(context.Background(), st, layout.Ref{Project: "econumo"}, "latest", "amd64", dir)
+			require.EqualError(t, err, "econumo/latest/SHA256SUMS changed during the download; try again")
+			assert.NotErrorIs(t, err, release.ErrBadBuild)
+			assert.Empty(t, dirFiles(t, dir))
+		})
+	}
+}
+
+func TestFetchSumsRereadFailsIsNotBadBuild(t *testing.T) {
+	mem := publishFixture(t, "econumo", "econumo-linux-amd64", "econumo-linux-arm64", "econumo.service")
+	o := mem.Objects["econumo/latest/econumo-linux-amd64"]
+	o.Data = append([]byte("x"), o.Data...)
+	mem.Objects["econumo/latest/econumo-linux-amd64"] = o
+	st := &publishingStore{Mem: mem, key: "econumo/latest/SHA256SUMS", laterErr: errBoom}
+
+	_, err := release.Fetch(context.Background(), st, layout.Ref{Project: "econumo"}, "latest", "amd64", t.TempDir())
+	require.ErrorIs(t, err, errBoom)
+	assert.NotErrorIs(t, err, release.ErrBadBuild)
+	assert.Contains(t, err.Error(), "checksum mismatch")
+}
+
+func TestFetchSumsUnchangedMismatchIsBadBuild(t *testing.T) {
+	mem := publishFixture(t, "econumo", "econumo-linux-amd64", "econumo-linux-arm64", "econumo.service")
+	o := mem.Objects["econumo/latest/econumo-linux-amd64"]
+	o.Data = append([]byte("x"), o.Data...)
+	mem.Objects["econumo/latest/econumo-linux-amd64"] = o
+	st := &publishingStore{Mem: mem, key: "econumo/latest/SHA256SUMS", later: mem.Objects["econumo/latest/SHA256SUMS"].Data}
+
+	_, err := release.Fetch(context.Background(), st, layout.Ref{Project: "econumo"}, "latest", "amd64", t.TempDir())
+	require.ErrorIs(t, err, release.ErrBadBuild)
+	assert.Equal(t, 2, st.reads, "SHA256SUMS was read again to tell")
 }
